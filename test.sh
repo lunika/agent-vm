@@ -439,5 +439,158 @@ else
 fi
 
 # =============================================================================
+section "volumes: folder_filter scoping"
+# =============================================================================
+# The fourth field scopes a volume entry to one project directory. The builder
+# is pure given (vm_name, host_dir) — it only stages under $HOME and prints the
+# mounts JSON — so it can be exercised directly. The filter must match the
+# *exact* project dir (no subdirectories), and a non-match is skipped silently:
+# a shared volumes file routinely carries other projects' entries.
+FFPROJ="$SB/ff-proj"
+mkdir -p "$FFPROJ/sub" "$SB/ff-vol"
+printf 'vol-content' > "$SB/ff-file.txt"
+
+ff_mounts() {  # ff_mounts <host_dir> <volumes-content>
+  local dir="$1"
+  mkdir -p "$SB/ff-home/.agent-vm"
+  printf '%s' "$2" > "$SB/ff-home/.agent-vm/volumes"
+  HOME="$SB/ff-home" bash -c '
+    source "'"$AGENT_VM_SH"'"
+    _agent_vm_build_mounts_json ff-vm "$1"
+  ' _ "$dir" 2>/dev/null
+}
+
+# Subdirectories of a matching filter do not match, and the entry vanishes
+# entirely from other projects' JSON.
+check "filter matches the exact project dir" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:rw:$FFPROJ" | grep -cF "\"$SB/ff-vol\"")" "1"
+check "filter with trailing slash still matches" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:rw:$FFPROJ/" | grep -cF "\"$SB/ff-vol\"")" "1"
+if ff_mounts "$FFPROJ/sub" "$SB/ff-vol:rw:$FFPROJ" | grep -qF "$SB/ff-vol"; then
+  fail "filter must not match a subdirectory"
+else
+  pass "filter does not match a subdirectory"
+fi
+check "other projects skip the entry silently" \
+  "$(ff_mounts "$SB/elsewhere" "$SB/ff-vol:rw:$FFPROJ" | grep -cF "$SB/ff-vol")" "0"
+# ff_mounts discards the builder's stderr, so silence is asserted on a captured
+# copy of it — otherwise a spurious warning would go unnoticed here.
+ff_mounts_err() {  # ff_mounts_err <stderr-file> <host_dir> <volumes-content>
+  local err_file="$1"
+  mkdir -p "$SB/ff-home/.agent-vm"
+  printf '%s' "$3" > "$SB/ff-home/.agent-vm/volumes"
+  HOME="$SB/ff-home" bash -c '
+    source "'"$AGENT_VM_SH"'"
+    _agent_vm_build_mounts_json ff-vm "$1"
+  ' _ "$2" 2>"$err_file"
+}
+ff_mounts_err "$SB/ff-warn.err" "$SB/elsewhere" "$SB/ff-vol:rw:$FFPROJ" >/dev/null
+if [ -s "$SB/ff-warn.err" ]; then
+  fail "a non-matching filter must not warn"; sed 's/^/         /' "$SB/ff-warn.err"
+else
+  pass "a non-matching filter does not warn"
+fi
+# An explicitly empty fourth field must fail CLOSED: falling back to "no
+# filter" would silently widen a project-scoped mount to every project.
+ff_mounts_err "$SB/ff-warn.err" "$SB/elsewhere" "$SB/ff-vol:rw:" >/dev/null
+if grep -q "empty folder_filter" "$SB/ff-warn.err"; then
+  pass "an empty folder_filter is refused (fail closed)"
+else
+  fail "an empty folder_filter is refused (fail closed)"
+fi
+ff_mounts_err "$SB/ff-warn.err" "$FFPROJ" "$SB/ff-vol:rw:" >/dev/null
+if grep -q "empty folder_filter" "$SB/ff-warn.err"; then
+  pass "an empty folder_filter warns and is skipped even for its own project"
+else
+  fail "an empty folder_filter warns and is skipped even for its own project"
+fi
+check "entry without filter still mounts everywhere" \
+  "$(ff_mounts "$SB/elsewhere" "$SB/ff-vol:ro" | grep -cF "\"$SB/ff-vol\"")" "1"
+
+# The filter combines with the other fields instead of displacing them: mode,
+# destination, and the unfiltered 3-field form must behave exactly as before.
+# (The JSON always opens with the project-dir entry, itself writable — match
+# the volume entry itself, not just the writable flag.)
+check "filter keeps the rw mode" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:/vm/vol:rw:$FFPROJ" | grep -cF "\"location\": \"$SB/ff-vol\", \"mountPoint\": \"/vm/vol\", \"writable\": true")" "1"
+check "filter defaults to ro" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:/vm/vol:$FFPROJ" | grep -cF "\"location\": \"$SB/ff-vol\", \"mountPoint\": \"/vm/vol\", \"writable\": false")" "1"
+check "filter keeps the destination" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:/vm/vol:rw:$FFPROJ" | grep -cF '/vm/vol')" "1"
+# The 3-field `src:dst:mode` form must NOT have its mode eaten as a filter —
+# that is the regression risk of adding a fourth field.
+check "3-field mode still parses as mode" \
+  "$(ff_mounts "$SB/elsewhere" "$SB/ff-vol:/vm/vol:rw" | grep -cF "\"location\": \"$SB/ff-vol\", \"mountPoint\": \"/vm/vol\", \"writable\": true")" "1"
+
+# A raw control character (CR from a CRLF editor, tab, ESC, …) in src/dst is
+# invalid unescaped JSON (RFC 8259) and would make `limactl edit --set` die
+# with a cryptic parse error — it must be refused, not interpolated.
+ff_mounts_err "$SB/ff-warn.err" "$SB/elsewhere" "$(printf '%s' "$SB/ff-vol:/vm/v\rv:rw")" >/dev/null
+if grep -q "invalid characters" "$SB/ff-warn.err"; then
+  pass "a control character in an entry is refused"
+else
+  fail "a control character in an entry is refused"
+fi
+
+# Mode detection must be an exact-field match, and an entry the parser cannot
+# place unambiguously must be REFUSED, not guessed: the wrong guess would emit
+# an unscoped mount (the CodeRabbit review caught `src:dst:rw:/p/app:ro`
+# silently losing its filter). Ambiguity is asserted via the captured stderr.
+check "mode keyword may sit before the filter" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:/vm/vol:rw:$FFPROJ" | grep -cF "\"location\": \"$SB/ff-vol\", \"mountPoint\": \"/vm/vol\", \"writable\": true")" "1"
+check "mode keyword may sit after the filter" \
+  "$(ff_mounts "$FFPROJ" "$SB/ff-vol:/vm/vol:${FFPROJ}:rw" | grep -cF "\"location\": \"$SB/ff-vol\", \"mountPoint\": \"/vm/vol\", \"writable\": true")" "1"
+check "dst ending in 'ro' is not a mode" \
+  "$(ff_mounts "$SB/elsewhere" "$SB/ff-vol:/vm/gyro" | grep -cF "\"location\": \"$SB/ff-vol\", \"mountPoint\": \"/vm/gyro\"")" "1"
+ff_mounts_err "$SB/ff-warn.err" "$FFPROJ" "$SB/ff-vol:/vm/vol:rw:${FFPROJ}:ro" >/dev/null
+if grep -q "ambiguous" "$SB/ff-warn.err" \
+   && ! grep -qF "$SB/ff-vol" <(ff_mounts "$FFPROJ" "$SB/ff-vol:/vm/vol:rw:${FFPROJ}:ro"); then
+  pass "a trailing ro/rw after the filter is refused, not unscoped"
+else
+  fail "a trailing ro/rw after the filter is refused, not unscoped"
+fi
+ff_mounts_err "$SB/ff-warn.err" "$FFPROJ" "$SB/ff-vol:/vm/vol:rw:${FFPROJ}:extra" >/dev/null
+if grep -q "ambiguous" "$SB/ff-warn.err"; then
+  pass "a non-path fourth field is refused"
+else
+  fail "a non-path fourth field is refused"
+fi
+ff_mounts_err "$SB/ff-warn.err" "$FFPROJ" "$SB/ff-vol:/a/b/c/d:e:rw:$FFPROJ" >/dev/null
+if grep -q "too many" "$SB/ff-warn.err"; then
+  pass "more than four fields is refused"
+else
+  fail "more than four fields is refused"
+fi
+
+# File mounts honour the filter too (staged hardlink, not a parent exposure).
+ff_file_mounts() { ff_mounts "$1" "$SB/ff-file.txt:/vm/ff.txt:ro:$FFPROJ"; }
+check "file mount applies to its project" \
+  "$(ff_file_mounts "$FFPROJ" | grep -cF '/tmp/.agent-vm-file-mounts/')" "1"
+check "file mount skipped for other projects" \
+  "$(ff_file_mounts "$SB/elsewhere" | grep -cF '/tmp/.agent-vm-file-mounts/')" "0"
+
+# Filtering must not leave stale staged files behind: the per-VM staging index
+# is shared by all entries, so a skipped entry must not shift the others'.
+mkdir -p "$SB/ff-home/.agent-vm"
+printf '%s\n%s\n' "$SB/ff-file.txt:/vm/a.txt:ro:$SB/other-project" "$SB/ff-vol:/vm/b:ro:$FFPROJ" \
+  > "$SB/ff-home/.agent-vm/volumes"
+ff_json="$(HOME="$SB/ff-home" bash -c '
+  source "'"$AGENT_VM_SH"'"
+  _agent_vm_build_mounts_json ff-vm "'"$FFPROJ"'"
+')"
+check "skipped entry does not shift later mounts" \
+  "$(printf '%s' "$ff_json" | grep -cF "\"$SB/ff-vol\"")" "1"
+
+# The 4-field entry must survive the invalid-character guard and stay valid
+# JSON end to end (the JSON is interpolated into limactl edit --set).
+if ! command -v jq >/dev/null 2>&1; then
+  printf '  skip filtered-mounts JSON check (jq not installed)\n'
+elif printf '%s\n' "$ff_json" | jq -e . >/dev/null 2>&1; then
+  pass "filtered mounts JSON is valid JSON"
+else
+  fail "filtered mounts JSON is valid JSON"
+fi
+
+# =============================================================================
 printf '\n%s passed, %s failed\n' "$PASSED" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

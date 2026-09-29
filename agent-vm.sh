@@ -306,7 +306,10 @@ _agent_vm_cleanup_state() {
 
 # Build the .mounts JSON array for a VM. The first entry is always the project
 # dir (writable). Additional entries come from ~/.agent-vm/volumes, parsed as
-# Docker-Compose-ish `source[:destination][:mode]` (mode ∈ {ro,rw}, default ro).
+# Docker-Compose-ish `source[:destination][:mode][:folder_filter]` (mode ∈
+# {ro,rw}, default ro). When folder_filter is present the entry only applies
+# to the VM whose project directory equals it (compared on the same absolute,
+# trailing-slash-free form used for the VM name).
 #
 # Side effects: stages any file mounts as hardlinks under
 # ~/.agent-vm/file-mounts/<vm>/ and persists the file mount metadata to
@@ -321,19 +324,67 @@ _agent_vm_build_mounts_json() {
   local file_mounts_cache="$AGENT_VM_STATE_DIR/.agent-vm-file-mounts-${vm_name}"
 
   if [[ -f "$mounts_file" ]]; then
-    local staging_idx=0
-    while IFS= read -r line || [[ -n "$line" ]]; do
+    local staging_idx=0 raw_line line
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      line="$raw_line"
       line="${line%%#*}"                                          # strip comments
       line="${line#"${line%%[![:space:]]*}"}"                     # trim leading whitespace
       line="${line%"${line##*[![:space:]]}"}"                     # trim trailing whitespace
       [[ -z "$line" ]] && continue
-      # Parse source[:destination][:mode] syntax (like docker compose volumes).
-      # The trailing mode segment is only recognized when it equals "ro" or
-      # "rw" — anything else is treated as a destination path.
-      local src="$line" dst="" mode="ro"
-      if [[ "$line" == *:ro || "$line" == *:rw ]]; then
-        mode="${line##*:}"
+      # Parse source[:destination][:mode][:folder_filter] syntax (like docker
+      # compose volumes, plus a trailing per-project filter). Fields are read
+      # from the right: a trailing field of exactly "ro"/"rw" is the mode, and
+      # with three or more fields remaining the next one is the folder_filter,
+      # which must look like an absolute (or ~-prefixed) path — only that can
+      # ever equal the project dir. A mode keyword may also sit between
+      # destination and filter (`src:dst:rw:filter`). Everything ambiguous —
+      # a second ro/rw segment, too many fields, a non-path filter — is
+      # refused with a warning instead of guessed: the wrong guess is an
+      # unscoped mount, the exact exposure the filter exists to prevent.
+      # With two fields the form stays source[:destination] (or source:mode),
+      # exactly as before.
+      local src="$line" dst="" mode="ro" folder_filter="" mode_set="" tail
+      tail="${line##*:}"
+      if [[ "$tail" == "ro" || "$tail" == "rw" ]]; then
+        mode="$tail"
         line="${line%:*}"
+        mode_set=1
+      fi
+      if [[ "$line" == *:*:* ]]; then
+        folder_filter="${line##*:}"
+        line="${line%:*}"
+        # An empty fourth field (`src:dst:rw:`) must NOT fall back to "no
+        # filter": that would silently widen a project-scoped mount to every
+        # project — exactly what the filter exists to prevent (e.g. a shared
+        # rw cache suddenly exposed to all VMs because of one dangling colon).
+        # Fail closed instead.
+        if [[ -z "$folder_filter" ]]; then
+          echo "Warning: Mount entry '${raw_line}' (from ~/.agent-vm/volumes) has an empty folder_filter; refusing to mount it everywhere. Add a path or drop the trailing ':'. Skipping." >&2
+          continue
+        fi
+        # A relative filter can never equal the (absolute) project dir, so a
+        # non-path field here is a mangled entry, not a scope — refuse it.
+        # (Also covers `~user/...`, which the leading-~ expansion would mangle.)
+        if [[ "$folder_filter" != /* && "$folder_filter" != "~" && "$folder_filter" != "~/"* ]]; then
+          echo "Warning: Mount entry '${raw_line}' (from ~/.agent-vm/volumes) has an ambiguous folder_filter ('${folder_filter}' is not an absolute path); refusing to guess. Skipping." >&2
+          continue
+        fi
+        # A mode keyword may sit between dst and the filter (src:dst:rw:filter),
+        # but when the mode was already read off the end, a second ro/rw means
+        # the entry has more fields than the grammar — refuse rather than guess.
+        tail="${line##*:}"
+        if [[ "$tail" == "ro" || "$tail" == "rw" ]]; then
+          if [[ -n "$mode_set" ]]; then
+            echo "Warning: Mount entry '${raw_line}' (from ~/.agent-vm/volumes) has more than one 'ro'/'rw' segment and is ambiguous; write the mode before the filter (src:dst:MODE:FILTER) or append an explicit final one. Skipping." >&2
+            continue
+          fi
+          mode="$tail"
+          line="${line%:*}"
+        fi
+        if [[ "$line" == *:*:* ]]; then
+          echo "Warning: Mount entry '${raw_line}' (from ~/.agent-vm/volumes) has too many ':'-separated fields to tell destination, mode and folder_filter apart; refusing to guess. Skipping." >&2
+          continue
+        fi
       fi
       if [[ "$line" == *:* ]]; then
         src="${line%%:*}"
@@ -342,10 +393,21 @@ _agent_vm_build_mounts_json() {
         src="$line"
       fi
       src="${src/#\~/$HOME}"                                      # expand ~
+      if [[ -n "$folder_filter" ]]; then
+        folder_filter="${folder_filter/#\~/$HOME}"                # expand ~
+        folder_filter="${folder_filter%/}"                        # tolerate a trailing slash
+        # Scoped to another project: skip silently. Silence is the point — a
+        # shared volumes file routinely carries other projects' entries.
+        [[ "$folder_filter" == "$host_dir" ]] || continue
+      fi
       # Reject characters that would break JSON interpolation below or the
-      # pipe-separated cache format used for file mounts.
-      if [[ "$src" == *[$'"\\\n|']* || "$dst" == *[$'"\\\n|']* ]]; then
-        echo "Warning: Mount entry '${line}' (from ~/.agent-vm/volumes) contains invalid characters (quote/backslash/newline/pipe), skipping." >&2
+      # pipe-separated cache format used for file mounts. Raw control chars
+      # (tab, CR, ESC, …) are rejected too: RFC 8259 forbids them unescaped in
+      # JSON strings, so one in src/dst would make `limactl edit --set` fail
+      # with a cryptic parse error (verified with jq).
+      if [[ "$src" == *[$'"\\\n|']* || "$dst" == *[$'"\\\n|']* \
+           || "$src" == *[[:cntrl:]]* || "$dst" == *[[:cntrl:]]* ]]; then
+        echo "Warning: Mount entry '${line}' (from ~/.agent-vm/volumes) contains invalid characters (quote/backslash/newline/pipe/control character), skipping." >&2
         continue
       fi
       if [[ ! -e "$src" ]]; then
@@ -1124,8 +1186,9 @@ VMs are persistent and unique per directory. Running "agent-vm shell" or
 Customization:
   ~/.agent-vm/env                   Shared env vars / tokens (dotenv-style;
                                      auto-loaded into every VM shell)
-  ~/.agent-vm/volumes               Extra host paths to mount in VMs (one per
-                                     line, supports both directories and files)
+   ~/.agent-vm/volumes               Extra host paths to mount in VMs (one per
+                                     line, supports both directories and files,
+                                     optionally scoped to one project dir)
   ~/.agent-vm/setup.sh              Per-user setup (runs during "agent-vm setup")
   ~/.agent-vm/runtime.sh            Per-user runtime (runs on each VM start)
   <project>/.agent-vm.runtime.sh    Per-project runtime (runs on each VM start)

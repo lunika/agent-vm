@@ -232,7 +232,7 @@ reading it.
 
 ### Extra host mounts: `~/.agent-vm/volumes`
 
-List host files or directories to mount inside every VM. One path per line, `~` is expanded, `#` starts a comment. Uses Docker Compose-style `source[:destination][:mode]` syntax, where `mode` is `ro` (default) or `rw`:
+List host files or directories to mount inside every VM. One path per line, `~` is expanded, `#` starts a comment. Uses Docker Compose-style `source[:destination][:mode][:folder_filter]` syntax, where `mode` is `ro` (default) or `rw`:
 
 ```bash
 # ~/.agent-vm/volumes
@@ -252,6 +252,19 @@ List host files or directories to mount inside every VM. One path per line, `~` 
 ```
 
 When no destination is specified, the path is mounted at the same location inside the VM. Non-existent paths are skipped with a warning. Changes to this file take effect on new VMs (use `--reset` to re-apply to existing ones).
+
+An optional fourth field, `folder_filter`, scopes an entry to a single project: the volume is mounted only when agent-vm runs in exactly that directory (the filter's leading `~` is expanded, a trailing `/` is ignored, and subdirectories do not match). Other projects skip the entry silently, so one shared volumes file can carry per-project mounts for several projects:
+
+```bash
+# ~/.agent-vm/volumes
+
+# Only mounted when agent-vm runs in /home/user/project/foo
+~/.cache/shared:/home/youruser.linux/.cache/shared:rw:/home/user/project/foo
+```
+
+Note this means the entry is baked into a VM at creation: if you later add or change a `folder_filter` for a project that already has a VM, run `agent-vm --reset` in that project to re-apply it.
+
+The filter field must be an absolute path (or start with `~/`, whose leading `~` is expanded); the mode keyword may sit between destination and filter (`src:dst:MODE:FILTER`) or at the very end (`src:dst:FILTER:MODE`). Anything ambiguous — an empty fourth field (a dangling `:`), a second `ro`/`rw` segment, more than four fields, or a filter that is not a path — is refused with a warning and the entry is skipped, never guessed: the wrong guess would silently mount a project-scoped volume in every project.
 
 `rw` is only supported for **directories**. Files are always read-only: with the hardlink/staging strategy used below, writable file mounts would silently desync on cross-filesystem setups. If you need a writable single file, mount its parent directory as `rw` instead. A destination literally named `ro` or `rw` is treated as a mode keyword — append an explicit `:ro`/`:rw` to disambiguate.
 
