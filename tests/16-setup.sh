@@ -95,7 +95,7 @@ if command -v git >/dev/null 2>&1; then
   cat > "$RB/gh" <<STUB
 #!/bin/sh
 case "\$1 \$2" in
-  "run list") echo "completed success" ;;
+  "run list") echo "\${REL_CI:-completed success}" ;;
   "release view") [ -e "$SB/rel-released" ] ;;
   "repo view") echo "o/r" ;;
 esac
@@ -118,6 +118,16 @@ STUB
     *"no formula at $SB/no-tap/Formula/agent-vm.rb"*"rc=1")
       case "$(AGENT_VM_TAP="$SB/no-tap" relrun)" in *"Checking the repository"*) fail "release.sh: the formula is checked after the repository" ;; *) pass "release.sh: a missing formula stops it first" ;; esac ;;
     *) fail "release.sh: missing formula: $(AGENT_VM_TAP="$SB/no-tap" relrun)" ;;
+  esac
+  # A failed workflow stops the run; --bypass-checks goes on, saying so.
+  case "$(REL_CI="completed failure" relrun; echo "rc=$?")" in
+    *"did not pass"*"rc=1") pass "release.sh: a failed test workflow stops it" ;;
+    *) fail "release.sh: failed workflow: $(REL_CI="completed failure" relrun)" ;;
+  esac
+  out="$( cd "$RR" && REL_CI="completed failure" PATH="$RB:$PATH" bash ./release.sh "$AGENT_VM_VERSION" --dry-run --bypass-checks 2>&1 )"
+  case "$out" in
+    *"not checked (--bypass-checks)"*"dry run complete"*) pass "release.sh --bypass-checks: the workflow is skipped, with a warning" ;;
+    *) fail "release.sh --bypass-checks: $out" ;;
   esac
   touch "$SB/rel-released"
   case "$(relrun)" in *"tag v$AGENT_VM_VERSION already exists"*) pass "release.sh: a released tag is still refused" ;; *) fail "release.sh: a released tag was not refused" ;; esac

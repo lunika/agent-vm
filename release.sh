@@ -5,6 +5,7 @@
 #   ./release.sh X.Y.Z             check, then tag, push and publish
 #   ./release.sh X.Y.Z --dry-run   run every check, change nothing
 #   ./release.sh X.Y.Z --yes       no confirmation prompt
+#   ./release.sh X.Y.Z --bypass-checks   without waiting for the test workflow
 #   ./release.sh notes X.Y.Z       print that version's CHANGELOG.md section
 #
 # It bumps and commits nothing. First, in an ordinary commit on main: set
@@ -40,7 +41,7 @@ warn() { printf '%s!%s %s\n' "$c_y" "$c_0" "$*"; }
 die()  { printf '%s✗%s %s\n' "$c_r" "$c_0" "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '5,9p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -88,11 +89,12 @@ fi
 VERSION="$1"; shift
 valid_version "$VERSION" || die "not a version: '$VERSION' (expected X.Y.Z)"
 TAG="v$VERSION"
-DRY_RUN=""; ASSUME_YES=""
+DRY_RUN=""; ASSUME_YES=""; BYPASS_CHECKS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --yes)     ASSUME_YES=1 ;;
+    --bypass-checks) BYPASS_CHECKS=1 ;;
     *)         usage ;;
   esac
   shift
@@ -176,12 +178,16 @@ ok "CHANGELOG.md has a $VERSION section ($(printf '%s\n' "$NOTES" | wc -l | tr -
 
 # --- 3. tests ------------------------------------------------------------------
 # CI is the authority: it runs bash 3.2, which this machine may lack.
+# --bypass-checks skips the workflow only: the checks above decide what the
+# tag and the release are, and still apply.
 echo "Checking the tests"
 ci="skipped"
-[ -z "$GH" ] || ci="$(gh run list --workflow test.yml --commit "$head" --limit 1 \
+[ -z "$GH" ] || [ -n "$BYPASS_CHECKS" ] || ci="$(gh run list --workflow test.yml --commit "$head" --limit 1 \
         --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)"
 case "$ci" in
-  skipped)             warn "the test workflow on ${head:0:12} was not checked (no gh)" ;;
+  skipped)
+    if [ -n "$BYPASS_CHECKS" ]; then warn "the test workflow on ${head:0:12} was not checked (--bypass-checks)"
+    else warn "the test workflow on ${head:0:12} was not checked (no gh)"; fi ;;
   "completed success") ok "the test workflow passed on ${head:0:12}" ;;
   "")                  die "no test workflow run for ${head:0:12}: push and wait for CI" ;;
   completed*)          die "the test workflow did not pass on ${head:0:12} ($ci)" ;;
