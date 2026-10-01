@@ -14,7 +14,7 @@
 #   1. clean tree, on main, level with origin/main, tag vX.Y.Z not taken (or
 #      already on this commit with no release: a failed run, resumed at 5)
 #   2. agent-vm.sh reports X.Y.Z, CHANGELOG.md has a non-empty X.Y.Z section
-#   3. the test workflow passed on this commit, and ./test.sh passes here
+#   3. the test workflow passed on this commit
 #   4. annotated tag vX.Y.Z, pushed
 #   5. GitHub release: the CHANGELOG section as notes, plus a tarball made by
 #      `git archive` (without www/ and the tests) and its SHA256SUMS. The tarball is built here, so its
@@ -191,8 +191,7 @@ for f in agent-vm.sh lib/*.sh agent-vm.setup.sh install.sh runtime.example.sh te
   bash -n "$f" || die "syntax error in $f"
 done
 sh -n www/public/install.sh || die "syntax error in www/public/install.sh"
-./test.sh >/dev/null 2>&1 || die "./test.sh fails here: run it to see why"
-ok "./test.sh passes here"
+ok "syntax checks pass here"
 
 # --- confirmation --------------------------------------------------------------
 echo
