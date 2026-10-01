@@ -9,10 +9,11 @@ Built on [Lima](https://lima-vm.io/). Ships dev tools, Docker, headless Chromium
 ## Install
 
 ```bash
-curl -fsSL https://www.agent-vm.org/install.sh | sh
+git clone https://github.com/sylvinus/agent-vm.git
+cd agent-vm && ./agent-vm.sh install
 ```
 
-Or `brew install sylvinus/tap/agent-vm`, or from a clone: `./agent-vm.sh install`. See [Install](https://www.agent-vm.org/#install) for prerequisites and Windows.
+`git pull` in the clone updates it. Or `curl -fsSL https://www.agent-vm.org/install.sh | sh`, or `brew install sylvinus/tap/agent-vm`. See [Install](https://www.agent-vm.org/#install) for prerequisites and Windows.
 
 ## Use
 
