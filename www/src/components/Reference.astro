@@ -1,0 +1,251 @@
+---
+import CodeBlock from './CodeBlock.astro';
+import DocGroups from './DocGroups.astro';
+import { inline } from '../lib/inline';
+import Heading from './Heading.astro';
+import { slug } from '../lib/slug';
+import { en } from '../i18n/en';
+import { t, type Locale } from '../i18n';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const d = t(locale).reference;
+---
+
+<section class="section" id="reference">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">{d.eyebrow}</p>
+      <Heading as="h2" id="reference" own={false} locale={locale}>{d.title}</Heading>
+      <p class="lede" set:html={inline(d.lede)} />
+    </div>
+
+    <div class="ref__groups">
+      {
+        d.commandGroups.map((group) => (
+          <div class="ref__group">
+            <h3 class="ref__group-title">{group.title}</h3>
+            <div class="table-wrap">
+              <table class="ref__commands">
+                <tbody>
+                  {group.rows.map(([command, description]) => (
+                    <tr>
+                      <th scope="row">{command}</th>
+                      <td set:html={inline(description ?? '')} />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))
+      }
+    </div>
+
+    <div class="ref__block">
+      <Heading as="h3" id={slug(en.reference.optionsTitle)} locale={locale} class="ref__sub">{d.optionsTitle}</Heading>
+      <p class="prose ref__note" set:html={inline(d.optionsNote)} />
+      <div class="table-wrap">
+        <table class="table--code table--grid">
+          <thead>
+            <tr>{d.optionsHeaders.map((header) => <th scope="col">{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {
+              d.options.map(([flag, description, fallback]) => (
+                <tr>
+                  <td>{flag}</td>
+                  <td set:html={inline(description ?? '')} />
+                  <td class="ref__default">{fallback}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ref__block">
+      <Heading as="h3" id={slug(en.reference.envTitle)} locale={locale} class="ref__sub">{d.envTitle}</Heading>
+      <p class="prose ref__note" set:html={inline(d.envNote)} />
+      <div class="table-wrap">
+        <table class="table--code table--grid">
+          <thead>
+            <tr>{d.envHeaders.map((header) => <th scope="col">{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {
+              d.env.map(([name, description, fallback]) => (
+                <tr>
+                  <td>{name}</td>
+                  <td set:html={inline(description ?? '')} />
+                  <td class="ref__default">{fallback}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ref__block ref__split">
+      <div class="ref__col">
+        <Heading as="h3" id={slug(en.reference.customTitle)} locale={locale} class="ref__sub">{d.customTitle}</Heading>
+        <p class="prose ref__note" set:html={inline(d.customLede)} />
+        <div class="table-wrap">
+          <table class="table--code ref__files">
+            <thead>
+              <tr>{d.customTable.headers.map((header) => <th scope="col">{header}</th>)}</tr>
+            </thead>
+            <tbody>
+              {
+                d.customTable.rows.map((row) => (
+                  <tr>
+                    {row.map((cell, index) =>
+                      index === 0 ? (
+                        <th scope="row">
+                          <code>{cell}</code>
+                        </th>
+                      ) : (
+                        <td>{cell}</td>
+                      ),
+                    )}
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <Heading as="h4" id={slug(en.reference.volumesTitle)} locale={locale} class="ref__sub">{d.volumesTitle}</Heading>
+        <p class="prose ref__note" set:html={inline(d.volumesBody)} />
+        <CodeBlock locale={locale} code={d.volumesCode} />
+        <p class="prose ref__note" set:html={inline(d.volumesNote)} />
+      </div>
+
+      <div class="ref__col">
+        <Heading as="h3" id="node" locale={locale} class="ref__sub">{d.nodeTitle}</Heading>
+        <p class="prose ref__note" set:html={inline(d.nodeBody)} />
+        <CodeBlock locale={locale} code={d.nodeCode} />
+        <p class="prose ref__note" set:html={inline(d.nodeNote)} />
+      </div>
+    </div>
+
+    <div class="ref__block ref__split">
+      <div class="ref__col">
+        <Heading as="h3" id={slug(en.reference.scriptsTitle)} locale={locale} class="ref__sub">{d.scriptsTitle}</Heading>
+        {d.scriptsParas.map((para) => <p class="prose ref__note" set:html={inline(para)} />)}
+      </div>
+      <div class="ref__col">
+        <CodeBlock locale={locale} code={d.scriptsCode} />
+      </div>
+    </div>
+
+    <DocGroups locale={locale} groups={d.groups} source={en.reference.groups} />
+  </div>
+</section>
+
+<style>
+  .ref__groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+    gap: clamp(1.5rem, 3vw, 2.5rem);
+    align-items: start;
+  }
+
+  .ref__group {
+    display: grid;
+    align-content: start;
+    min-width: 0;
+  }
+
+  .ref__group-title {
+    margin-bottom: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* No thead on the command tables: the group title names the block, and a
+     repeated "Command / What it does" row on five tables is noise. */
+  .ref__commands th[scope='row'] {
+    padding: 0.72rem 1rem;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+    font-family: var(--font-mono);
+    font-size: 0.83rem;
+    font-weight: 450;
+    white-space: nowrap;
+    color: var(--accent);
+  }
+
+  .ref__commands tbody tr:last-child th[scope='row'] {
+    border-bottom: 0;
+  }
+
+  .ref__block {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+    min-width: 0;
+    margin-top: clamp(2.5rem, 5vw, 4rem);
+  }
+
+  .ref__split {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(1.75rem, 4vw, 3.25rem);
+    align-items: start;
+  }
+
+  .ref__col {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+  }
+
+  .ref__sub {
+    font-size: 1.05rem;
+  }
+
+  .ref__note {
+    font-size: 0.9rem;
+  }
+
+  .ref__files th[scope='row'] {
+    padding: 0.72rem 1rem;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    font-weight: 500;
+    vertical-align: top;
+  }
+
+  .ref__files tbody tr:last-child th[scope='row'] {
+    border-bottom: 0;
+  }
+
+  .ref__files th[scope='row'] code {
+    font-size: 0.8rem;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .ref__default {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 62rem) {
+    .ref__split {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

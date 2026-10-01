@@ -28,7 +28,7 @@ agent-vm stop                  # or rm; list for all VMs
 agent-vm doctor                # what is wrong, and what to run
 ```
 
-Every command and option: [Usage](https://www.agent-vm.org/#usage) and [Reference](https://www.agent-vm.org/#reference).
+Everyday use: [Usage](https://www.agent-vm.org/#usage). Every command, option, file and variable: [Reference](https://www.agent-vm.org/#reference).
 
 ## Security
 

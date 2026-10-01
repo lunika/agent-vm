@@ -7,7 +7,7 @@ static HTML and GitHub Pages serves it.
 
 ```bash
 npm install
-npm run dev      # http://localhost:4321
+npm run dev      # http://localhost:4822
 npm run build    # -> dist/
 npm run preview  # serve dist/ locally
 ```

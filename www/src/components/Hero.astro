@@ -1,5 +1,6 @@
 ---
 import InstallTabs from './InstallTabs.astro';
+import { inline } from '../lib/inline';
 import { t, type Locale } from '../i18n';
 
 interface Props {
@@ -86,8 +87,8 @@ const session: Array<{ kind: 'cmd' | 'out' | 'ok' | 'dim' | 'gap'; text: string 
       {
         d.hero.points.map((point) => (
           <li class="hero__point">
-            <h2 class="hero__point-title">{point.title}</h2>
-            <p class="hero__point-body">{point.body}</p>
+            <h2 class="hero__point-title" set:html={inline(point.title)} />
+            <p class="hero__point-body" set:html={inline(point.body)} />
           </li>
         ))
       }

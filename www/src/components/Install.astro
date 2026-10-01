@@ -75,40 +75,6 @@ const d = t(locale);
         }
       </ol>
     </div>
-
-    {/* Sits with step 2 rather than in its own reference section: it is only
-        ever about `agent-vm setup`, which is on this page. */}
-    <div class="install__preinstall">
-      <Heading as="h3" id={slug(en.install.preinstallTitle)} locale={locale} class="install__sub">{d.install.preinstallTitle}</Heading>
-      <p class="prose install__sub-body" set:html={inline(d.install.preinstallBody)} />
-      <p class="install__names">{d.install.preinstallNames}</p>
-      <div class="table-wrap">
-        <table class="table--code table--grid">
-          <thead>
-            <tr>{d.install.setupHeaders.map((header) => <th scope="col">{header}</th>)}</tr>
-          </thead>
-          <tbody>
-            {
-              d.install.setup.map(([flag, description, fallback]) => (
-                <tr>
-                  <td>{flag}</td>
-                  <td set:html={inline(description ?? '')} />
-                  <td class="install__default">{fallback}</td>
-                </tr>
-              ))
-            }
-          </tbody>
-        </table>
-      </div>
-      <CodeBlock locale={locale} code={d.install.preinstallCode} />
-    </div>
-
-    <div class="install__extras">
-      <div class="note">
-        <strong class="note__title">{d.install.updateTitle}</strong>
-        <p class="prose" set:html={inline(d.install.updateBody)} />
-      </div>
-    </div>
   </div>
 </section>
 
@@ -201,58 +167,8 @@ const d = t(locale);
     max-width: 44rem;
   }
 
-  .install__preinstall {
-    display: grid;
-    gap: 1rem;
-    min-width: 0;
-    margin-top: clamp(2.5rem, 5vw, 4rem);
-  }
-
-  .install__sub {
-    font-size: 1.05rem;
-  }
-
-  .install__sub-body {
-    font-size: 0.93rem;
-    margin-top: -0.35rem;
-    max-width: 48rem;
-  }
-
-  .install__names {
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    line-height: 2;
-    color: var(--accent);
-    padding: 0.9rem 1.1rem;
-    border: 1px solid var(--accent-line);
-    border-radius: var(--radius);
-    background: var(--accent-wash);
-    overflow-wrap: anywhere;
-  }
-
-  .install__default {
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    color: var(--ink-3);
-    white-space: nowrap;
-  }
-
-  .install__extras {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: clamp(1.25rem, 3vw, 2.5rem);
-    margin-top: clamp(2.5rem, 5vw, 4rem);
-    align-items: start;
-    max-width: 52rem;
-  }
-
-  .install__extras .prose {
-    font-size: 0.93rem;
-  }
-
   @media (max-width: 62rem) {
-    .install__layout,
-    .install__extras {
+    .install__layout {
       grid-template-columns: minmax(0, 1fr);
     }
 

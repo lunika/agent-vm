@@ -1,4 +1,5 @@
 ---
+import CodeBlock from './CodeBlock.astro';
 import { inline } from '../lib/inline';
 import Heading from './Heading.astro';
 import { slug } from '../lib/slug';
@@ -105,6 +106,7 @@ const dg = d.architecture.diagram;
             </tbody>
           </table>
         </div>
+        <CodeBlock locale={locale} code={d.architecture.contentsCode} />
         <p class="prose arch__sub-note" set:html={inline(d.architecture.contentsNote)} />
       </div>
 

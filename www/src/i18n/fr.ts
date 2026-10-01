@@ -39,16 +39,16 @@ export const fr: Dictionary = {
     title: 'Donne aux agents une machine qu\'ils peuvent casser.',
     titleAccent: 'Garde la tienne.',
     lede:
-      'Un agent de code a besoin de droits étendus pour être utile : il installe des dépendances, lance des builds, démarre des serveurs. agent-vm donne à chaque projet sa propre VM Linux, et c\'est là que l\'agent travaille. Il n\'y voit ni tes clés SSH, ni tes sessions de navigateur, ni le reste de ton disque.',
+      'agent-vm lance les agents de code IA avec toutes les permissions, dans une VM Linux par projet. Ils n\'y voient ni tes clés SSH, ni tes sessions de navigateur, ni le reste de ton disque.',
     installLabel: 'Pour commencer',
     ctaPrimary: 'Installer',
     ctaSecondary: 'Comment ça marche',
     meta: 'Licence MIT · macOS, Linux, Windows (expérimental) · basé sur Lima',
     terminalCaption:
-      'Seul le dossier du projet est monté. Une VM par dossier, créée au premier lancement puis réutilisée.',
+      'Seul le dossier du projet est monté.',
     points: [
       {
-        title: 'Lima, seule dépendance côté hôte',
+        title: '[Lima](https://lima-vm.io/), seule dépendance côté hôte',
         body: 'Ni Node, ni npm, ni Docker Desktop sur ta machine : la chaîne d\'outils vit dans la VM. Sous Linux, Lima a aussi besoin de QEMU et d\'un accès à KVM.',
       },
       {
@@ -60,8 +60,8 @@ export const fr: Dictionary = {
         body: 'Un serveur de dev lancé dans la VM répond sur localhost, au même port. C\'est Lima qui s\'en charge : aucune option, aucune configuration.',
       },
       {
-        title: 'Cinq agents, une commande',
-        body: 'OpenCode, Claude Code, Codex CLI et Mistral Vibe, chacun lancé avec son option d\'approbation automatique. Pi, en option, ne demande jamais rien.',
+        title: 'Tout est prêt, et root pour le reste',
+        body: 'La VM de base contient les outils de dev, Docker, Chromium headless et les agents, choisis dans un assistant de setup. L\'agent est root dans sa VM : il installe lui-même ce qui lui manque.',
       },
     ],
   },
@@ -74,7 +74,7 @@ export const fr: Dictionary = {
     reasons: [
       {
         title: 'Installer une dépendance, c\'est exécuter du code',
-        body: 'Chaque `npm install` exécute des scripts d\'installation tiers avant que quiconque les ait lus. En 2025, le ver Shai-Hulud s\'est propagé ainsi dans des milliers de paquets npm : il récupérait jetons npm, PAT GitHub, clés SSH et identifiants cloud, puis s\'en servait pour publier des versions infectées d\'autres paquets. Ces installations n\'avaient rien d\'anormal en apparence.',
+        body: 'npm a lancé les scripts d\'installation de chaque paquet par défaut jusqu\'à npm 12 (juillet 2026), pip lance toujours le build d\'un paquet source, Cargo son `build.rs`, et tes tests exécutent ensuite tout ce qui a été installé. En 2025, le ver Shai-Hulud s\'est propagé ainsi dans des milliers de paquets npm : il récupérait jetons npm, PAT GitHub, clés SSH et identifiants cloud, puis s\'en servait pour se republier.',
       },
       {
         title: 'On finit par tout valider',
@@ -86,7 +86,7 @@ export const fr: Dictionary = {
       },
     ],
     closing:
-      'Une VM limite ce qu\'une erreur ou un agent compromis peut atteindre : ton code source et ce que tu as mis dans [son fichier d\'env](#share-secrets-across-vms), mais ni tes clés SSH, ni tes identifiants git, ni tes sessions de navigateur. [`--readonly`](#tighten-the-session) restreint encore, et c\'est l\'hôte qui l\'applique : root dans l\'invité ne peut pas le lever. Le projet partagé est protégé lui aussi : avec un Lima qui a `sshfs.readonlyNames`, chaque `.git` y est en lecture seule pour la VM, donc l\'agent ne peut pas déposer dans `.git` un hook ou une config que git lancerait ensuite sur ton hôte (voir [Protéger .git](#git) plus bas). Reste le réseau : l\'agent peut envoyer des données n\'importe où, et Lima expose le loopback de l\'hôte en `192.168.5.2`, donc une base de données de dev qui écoute sur localhost est joignable depuis la VM.',
+      'Une VM limite ce qu\'une erreur ou un agent compromis peut atteindre au projet et à ce que tu lui confies, comme [son fichier d\'env](#share-secrets-across-vms). Reste le réseau : voir [Sécurité](#security).',
   },
 
   install: {
@@ -99,7 +99,7 @@ export const fr: Dictionary = {
       { name: 'macOS, Linux ou Windows', note: 'Windows est expérimental : Git Bash, QEMU et Lima pour Windows requis.', href: '' },
       {
         name: 'Lima',
-        note: 'agent-vm setup propose de l\'installer avec Homebrew, dans une version qui garde les `.git` en lecture seule, en attendant son intégration en amont. Sous Linux, il faut aussi QEMU et KVM. Sous Windows, QEMU (winget) et la fonctionnalité Windows Hypervisor Platform ; setup propose le téléchargement de Lima.',
+        note: '`agent-vm setup` propose de l\'installer. Sous Linux, il faut aussi QEMU et KVM ; sous Windows, QEMU.',
         href: 'https://lima-vm.io/docs/installation/',
       },
       {
@@ -134,38 +134,21 @@ export const fr: Dictionary = {
         id: 'windows',
         label: 'Windows',
         code: '# dans Git Bash (expérimental)\nwinget install SoftwareFreedom.QEMU\ncurl -fsSL https://www.agent-vm.org/install.sh | sh',
-        note: 'Expérimental. À lancer dans Git Bash : c\'est l\'installeur curl, et `agent-vm setup` propose ensuite une version de Lima pour Windows. Prends-la : avec le Lima d\'origine, les partages passent par `reverse-sshfs`, qui ne cantonne pas la VM à ses partages, et root dans la VM peut atteindre tes clés SSH et le reste de ton disque (un démarrage le dit, et demande). Les VM ont aussi besoin de l\'hyperviseur de Windows, la fonctionnalité Windows Hypervisor Platform. Elle est désactivée par défaut et seul un administrateur peut l\'activer, une fois (Fonctionnalités de Windows, ou `DISM /Online /Enable-Feature /FeatureName:HypervisorPlatform /All`, puis un redémarrage). Sur un portable géré, c\'est une demande à faire au service informatique. Sans elle, les VM ne démarrent pas.',
+        note: 'Expérimental, dans Git Bash. `agent-vm setup` propose ensuite une version de Lima pour Windows : prends-la, celle d\'origine ne cantonne pas la VM à ses partages. Les VM ont aussi besoin de la fonctionnalité Windows Hypervisor Platform, qu\'un administrateur active une fois : voir [Windows et WSL](#windows-and-wsl).',
       },
     ],
     steps: [
       {
         title: 'Construire l\'image de base',
-        body: 'À faire une seule fois. Sans Lima, propose d\'abord de l\'installer, dans la version qui garde les `.git` en lecture seule pour les VM. L\'assistant propose ensuite une sélection par défaut : il suffit d\'appuyer sur Entrée pour l\'accepter. Après lui, un Lima qui ne sait pas garder les `.git` en lecture seule reçoit la même proposition. Crée enfin une VM Debian 13, y installe la chaîne d\'outils et les agents, puis l\'arrête et la garde comme image de base.',
+        body: 'À faire une seule fois. Sans Lima, ou sans la version qui garde `.git` [en lecture seule](#git), propose d\'abord de l\'installer. Un assistant choisit ensuite ce qui entre dans l\'image : Entrée prend la sélection par défaut (voir [Ce qu\'il y a dans la VM](#what-is-in-the-vm)). Crée avec elle une VM Debian 13, puis la garde, arrêtée, comme image de base.',
         code: 'agent-vm setup',
       },
       {
         title: 'Lancer un agent dans ton projet',
-        body: 'Clone l\'image en une VM dédiée à ce dossier, y monte le répertoire de travail et lance l\'agent, sans demande de confirmation. Avant le démarrage de la VM, agent-vm peut s\'arrêter sur une question de sécurité, par exemple un réglage git qu\'il propose de faire : voir [Protéger .git](#git).',
+        body: 'Clone l\'image en une VM dédiée à ce dossier, y monte le dossier et lance l\'agent, sans demande de confirmation. Un démarrage peut d\'abord s\'arrêter sur une question de sécurité : voir [Protéger .git](#git).',
         code: 'cd ton-projet\nagent-vm opencode     # ou : agent-vm claude',
       },
     ],
-    preinstallTitle: 'Choisir ce qui entre dans l\'image',
-    preinstallBody:
-      'En minuscules, séparés par des virgules. `default` installe tout sauf Ruby, Rust, Go, Pi et le MCP Playwright, `all` installe tout, `none` rien. `codex` et `pi` entraînent `node`, tout comme `mcp-chrome` quand `chromium` et un agent sont choisis, parce que ces installations passent par `npm` et `npx`. Les deux serveurs MCP sont ignorés sans `node` et `chromium`. Sans terminal, l\'assistant est sauté et la sélection par défaut est installée. `setup` accepte aussi `--disk`, `--memory` et `--cpus` pour l\'image elle-même.',
-    preinstallNames:
-      'python · node · ruby · rust · golang · docker · chromium · gh · claude · opencode · codex · vibe · pi · mcp-chrome · mcp-playwright',
-    preinstallCode:
-      'agent-vm setup                                       # assistant interactif\nagent-vm setup --preinstall=default                  # sans question\nagent-vm setup --preinstall=default,rust             # avec Rust en plus\nagent-vm setup --preinstall=python,docker,claude     # Claude seul, minimal\nagent-vm setup --preinstall=node,chromium,opencode   # sans MCP\nagent-vm setup --disk 50 --memory 16 --cpus 8        # pour les gros projets',
-    setupHeaders: ['Option', 'Rôle', 'Défaut'],
-    setup: [
-      ['--disk GB', 'Taille du disque de l\'image de base.', '10'],
-      ['--memory GB', 'Mémoire de l\'image de base.', '3'],
-      ['--cpus N', 'Nombre de CPU de l\'image de base.', '1'],
-      ['--preinstall=LIST', 'N\'installe que cette liste, séparée par des virgules. Saute l\'assistant.', 'assistant'],
-    ],
-    updateTitle: 'Mise à jour',
-    updateBody:
-      'Installé avec curl : relance l\'installeur. Avec Homebrew : `brew upgrade agent-vm`. Depuis un clone : `git pull`, rien à réinstaller. `agent-vm uninstall` retire le lien que posent les installations curl et git. Depuis la 0.1.0, lance `agent-vm setup` une fois : une VM issue d\'une base construite par la 0.1.0 redémarre une fois de plus à son prochain lancement pour installer `sshfs`, nécessaire pour garder `.git` en lecture seule, et `--reset` lui donne la nouvelle base. Cette migration sera retirée dans une prochaine version.',
   },
 
 
@@ -173,7 +156,7 @@ export const fr: Dictionary = {
     eyebrow: 'Utilisation',
     title: 'Les commandes du quotidien.',
     lede:
-      'Chaque VM est rattachée à un dossier, sauf celles de `--scratch`. Relance une commande d\'agent dans le même dossier et tu retrouves la même machine, avec ses paquets, ses conteneurs et ses identifiants.',
+      'À lancer depuis le dossier de ton projet. La [Référence](#reference) liste chaque commande, option et fichier.',
     cards: [
       {
         title: 'Lancer un agent',
@@ -182,8 +165,8 @@ export const fr: Dictionary = {
       },
       {
         title: 'Accéder au serveur de dev',
-        body: 'Lima redirige vers l\'hôte les ports ouverts dans la VM. Démarre un serveur depuis l\'agent ou depuis un shell : il répond sur localhost au même port, dans ton navigateur. L\'inverse est vrai aussi : tout port sur lequel l\'agent écoute dans la VM apparaît sur ton propre localhost. Considère ces ports comme les siens.',
-        code: 'agent-vm run npm run dev   # puis ouvre localhost:5173\nagent-vm shell             # pareil pour docker compose up',
+        body: 'Lima redirige chaque port ouvert dans la VM vers le même port de ton localhost : un serveur de dev s\'ouvre dans ton navigateur comme d\'habitude. Considère ces ports comme ceux de l\'agent.',
+        code: 'agent-vm run npm run dev         # puis ouvre localhost:5173\nagent-vm run docker compose up',
       },
       {
         title: 'Entrer dans la VM',
@@ -191,57 +174,31 @@ export const fr: Dictionary = {
         code: 'agent-vm shell                    # zsh dans la VM\nagent-vm run npm install          # commande unique\nagent-vm run --tty opencode       # un PTY pour les TUI\nagent-vm sh -c "ls -la | grep config"',
       },
       {
-        title: 'Brancher un IDE en SSH',
-        body: 'VS Code Remote-SSH, JetBrains Gateway ou un agent graphique peuvent garder leur fenêtre sur l\'hôte et faire tourner le reste dans la VM. Lima écrit une config SSH par VM avec le port du démarrage en cours, sous l\'alias que `agent-vm info` affiche comme `ssh_host`. Mets les lignes ci-dessous en haut de `~/.ssh/config`, au-dessus de tout `Host *` : ssh garde la première valeur qu\'il trouve, et un `ForwardAgent yes` à cet endroit donnerait à la VM toutes les clés de ton agent SSH, tout comme le `remote.SSH.enableAgentForwarding` de VS Code sans ces lignes. Pour un outil qui enregistre le port plutôt que l\'alias, `--ssh-port` le fixe (`0` revient à un nouveau port à chaque démarrage).',
-        code: '# en haut de ~/.ssh/config\nInclude ~/.lima/*/ssh.config\nHost lima-agent-vm-*\n  ForwardAgent no\n  ForwardX11 no\n\nagent-vm info | grep ^ssh_host   # l\'alias à utiliser\nagent-vm --ssh-port 2222 shell   # un port fixe',
-      },
-      {
         title: 'Gérer le parc',
         body: 'Dans `list`, la VM du dossier courant est marquée d\'un `>`. Si un dossier a été renommé, seul `list` permet de retrouver sa VM.',
-        code: 'agent-vm list          # toutes les VM, la courante marquée, base de chacune\nagent-vm stop          # arrête, garde le disque\nagent-vm rm            # arrête et supprime\nagent-vm destroy-all   # toutes les VM, image de base comprise\nagent-vm doctor        # ce qui ne va pas, et quoi lancer',
+        code: 'agent-vm list          # chaque VM, la courante marquée\nagent-vm stop          # arrête, garde le disque\nagent-vm rm            # arrête et supprime\nagent-vm destroy-all   # tout, image de base comprise\nagent-vm doctor        # ce qui ne va pas, et quoi lancer',
       },
       {
         title: 'Restreindre la session',
-        body: 'Pratique pour une relecture ou un audit, où l\'agent n\'a rien à écrire. `--readonly` passe tous les partages de l\'hôte en lecture seule : le projet et les entrées de [`~/.agent-vm/volumes`](#customisation-files), y compris celles en `rw`, puisqu\'un volume accessible en écriture qui contient le projet serait un second accès. La restriction s\'applique aux partages Lima : c\'est l\'hôte qui refuse les écritures (l\'hyperviseur, ou le serveur SFTP de Lima sur les partages qui protègent `.git`), et root dans la VM ne peut pas la lever. Là où Lima ne l\'appliquerait que dans l\'invité, agent-vm refuse l\'option : `reverse-sshfs` sans `readonlyNames`, et virtiofs sous QEMU. Une VM en marche dans l\'autre mode est redémarrée, après confirmation (non par défaut) : refusé, ou sans terminal, la commande échoue, dans un sens comme dans l\'autre, pour qu\'une VM en lecture seule d\'une autre session ne repasse pas en écriture sous elle. Le disque de la VM, `$HOME` et `/tmp` restent accessibles en écriture, donc l\'agent peut toujours installer des paquets et écrire ses caches. Toute écriture dans le projet échoue en revanche, y compris `node_modules`, le dossier d\'état de l\'agent et ce qu\'y écrirait un script de runtime, puisque le mode est appliqué avant leur exécution. `--scratch` va plus loin : une nouvelle VM où rien de ce qui est à toi n\'est monté, que l\'agent remplit depuis le réseau (un `git clone` avec un jeton tiré d\'`agent-vm env`), supprimée à la fin de la commande ; sur un terminal, elle demande d\'abord, et un non ouvre un shell dans la VM. Son travail sort par le même chemin, en push ou en pull request. Les connexions n\'y survivent pas : les agents ont besoin de leur jeton dans `agent-vm env`, `ANTHROPIC_API_KEY`, ou `CLAUDE_CODE_OAUTH_TOKEN` obtenu par `claude setup-token`.',
-        code: 'agent-vm --readonly shell     # rien n\'est modifiable sur l\'hôte\nagent-vm --scratch claude     # rien de toi n\'est monté, supprimée à la sortie\nagent-vm --rm run npm test    # détruit la VM à la sortie',
+        body: '`--readonly` passe tous les partages de l\'hôte en lecture seule, volumes `rw` compris, et c\'est l\'hôte qui l\'impose : root dans la VM ne peut pas le lever. Les paquets s\'installent toujours sur le disque de la VM, mais rien n\'arrive dans le projet. `--scratch` ne monte rien de ce qui est à toi : l\'agent clone le code avec un jeton tiré d\'`agent-vm env`, pousse son travail, et la VM est supprimée à la sortie.',
+        code: 'agent-vm --readonly shell   # rien de modifiable sur l\'hôte\nagent-vm --scratch claude   # rien de monté, supprimée après\nagent-vm --rm run npm test  # détruit la VM à la sortie',
       },
       {
         title: 'Redimensionner à la volée',
-        body: 'Une nouvelle VM reprend ceux de l\'image de base : 10 Go de disque, 3 Go de mémoire, 1 CPU, sauf si `setup` en a reçu d\'autres. Passe une option avec une autre valeur et la VM est arrêtée, reconfigurée puis redémarrée ; une VM en marche demande d\'abord (non par défaut), et refusé, ou sans terminal, elle garde ses réglages. Le disque peut grandir, jamais rétrécir. CPU et mémoire sont plafonnés à la moitié de l\'hôte, mais VM par VM, pas au total : les VM persistent, et plusieurs VM allumées en même temps s\'additionnent. `agent-vm list` montre ce qui tourne, `rm` et `destroy-all` libèrent la place.',
+        body: 'Une nouvelle VM reprend les 10 Go de disque, 3 Go de mémoire et 1 CPU de l\'image. Passe une autre valeur et la VM est reconfigurée, après confirmation si elle tourne. Le disque ne fait que grandir. CPU et mémoire sont plafonnés à la moitié de l\'hôte, par VM.',
         code: 'agent-vm --disk 50 opencode\nagent-vm --memory 16 --cpus 8 shell\nagent-vm --reset claude   # re-cloner depuis l\'image',
       },
       {
         title: 'Partager des secrets entre VM',
-        body: 'De simples lignes `CLÉ=valeur` dans `~/.agent-vm/env`, poussées dans chaque VM à chaque lancement et chargées dans ses shells. Passe par les sous-commandes plutôt que d\'éditer le fichier à la main : il est sourcé par un shell, donc une seule apostrophe mal échappée casse tous les secrets du fichier, pas seulement cette ligne.',
-        code: 'agent-vm env set GH_TOKEN   # colle-le : ni affiché, ni dans l\'historique\nagent-vm env list           # les noms, jamais les valeurs\nagent-vm env has ANTHROPIC_API_KEY\n\n# limité à ce projet\nagent-vm project-env set SOME_PATH ./config',
+        body: 'Des lignes `CLÉ=valeur` dans `~/.agent-vm/env`, poussées dans chaque VM à chaque commande. Tout ce qui tourne dans la VM peut les lire : mets-y des jetons étroits et révocables. Passe par `env set` : une seule apostrophe mal placée casse tout le fichier.',
+        code: 'agent-vm env set GH_TOKEN   # masqué, hors historique\nagent-vm env list           # les noms, jamais les valeurs\nagent-vm env has ANTHROPIC_API_KEY\n\n# limité à ce projet\nagent-vm project-env set SOME_PATH ./config',
       },
       {
-        title: 'Interroger depuis un script',
-        body: 'Si tu pilotes agent-vm depuis un autre outil, passe par ces commandes plutôt que de parser la sortie destinée aux humains ou de lire `~/.agent-vm` : le nommage des VM, le nom de l\'image et les fichiers d\'état sont des détails d\'implémentation, amenés à changer. `version --min` renvoie `0` si le moteur est assez récent, `1` avec un message s\'il est trop ancien, et `2` si l\'appel lui-même est mal formé : une faute de frappe dans la version demandée ne passe donc pas pour un « moteur trop ancien ». Attention : un moteur antérieur à `--min` ignore l\'option et renvoie `0`. Dans `info`, les booléens valent `1` ou `0`, et ce qui ne peut pas être déterminé vaut `unknown`. Ces quatre commandes fonctionnent sans Lima. Sans terminal, un démarrage s\'arrête là où il poserait une question de sécurité : `security_questions` dans `info` les liste à l\'avance, `--unsafe-disable-security-prompts` les accepte, et `--readonly` les évite. Un redémarrage qu\'il demanderait échoue aussi : `--readonly` sur une VM en marche accessible en écriture, ou l\'inverse, et un redimensionnement d\'une VM en marche n\'est pas appliqué.',
-        code: 'agent-vm version --min 0.2.0 || exit 1  # silencieux si OK\nagent-vm name [dir]    # nom de la VM d\'un dossier\nagent-vm info [dir]    # une paire clé=valeur par ligne\nagent-vm help          # l\'aide intégrée\n\n# clés de info : version, template, state_dir,\n# project_env, dir, vm_name, base_exists,\n# vm_exists, vm_running, vm_stale,\n# ssh_host, ssh_config, git_protected,\n# security_questions',
+        title: 'Brancher un IDE en SSH',
+        body: 'VS Code Remote-SSH, JetBrains Gateway ou un agent graphique peuvent travailler dans la VM en SSH, par l\'alias qu\'`agent-vm info` affiche comme `ssh_host`. Mets ces lignes en haut de `~/.ssh/config` : un `ForwardAgent yes` trouvé avant elles donnerait tes clés SSH à la VM. `--ssh-port` fixe le port pour les outils qui l\'enregistrent.',
+        code: '# en haut de ~/.ssh/config\nInclude ~/.lima/*/ssh.config\nHost lima-agent-vm-*\n  ForwardAgent no\n  ForwardX11 no\n\nagent-vm info | grep ^ssh_host   # l\'alias à utiliser\nagent-vm --ssh-port 2222 shell   # un port fixe',
       },
     ],
-    customTitle: 'Fichiers de personnalisation',
-    customLede:
-      'Six fichiers facultatifs, aucun n\'est nécessaire pour démarrer. Ceux propres à l\'utilisateur sont dans `~/.agent-vm/`, ceux propres à un projet dans le projet lui-même.',
-    customTable: {
-      headers: ['Fichier', 'Portée', 'Quand'],
-      rows: [
-        ['~/.agent-vm/env', 'Toutes les VM', 'Copié à chaque lancement'],
-        ['~/.agent-vm/volumes', 'Toutes les VM, ou les projets qu\'une entrée désigne', 'Monté à la création de la VM'],
-        ['~/.agent-vm/setup.sh', 'Image de base', 'Une fois, pendant agent-vm setup'],
-        ['~/.agent-vm/runtime.sh', 'Toutes les VM', 'À chaque commande qui entre dans une VM, en premier'],
-        ['.agent-vm.runtime.sh', 'Un seul projet', 'À chaque commande qui entre dans sa VM, après le global'],
-        ['.agent-vm.env', 'Un seul projet', 'Copié après l\'env partagé, et prioritaire sur lui'],
-      ],
-    },
-    volumesTitle: 'Montages en plus : ~/.agent-vm/volumes',
-    volumesBody:
-      'Une ligne `source[:destination][:mode][:projet]` par montage, `~` développé à gauche, `#` pour les commentaires. Le mode est `ro` (par défaut) ou `rw`, et `rw` ne marche que pour les dossiers. Sans destination, le chemin est monté au même endroit dans la VM. Une destination relative est dans le projet, par-dessus ce que le projet a à cet endroit. Le quatrième champ, après un mode explicite, limite l\'entrée aux projets qu\'il désigne, `*` couvrant n\'importe quoi. Une entrée qui ne se lit pas ainsi est ignorée avec un avertissement, jamais montée partout.',
-    volumesCode:
-      '# ~/.agent-vm/volumes\n~/.gitconfig    # même chemin, lecture seule\n~/.cache/shared:/home/you.guest/.cache/shared:rw\n\n# seulement dans ~/work/webapp, comme son .claude, en lecture seule\n~/.claude-vm/webapp:.claude:ro:~/work/webapp\n\n# tous les projets sous ~/work\n~/.cache/pip:/home/you.guest/.cache/pip:rw:~/work/*\n\n# même chemin, un seul projet\n~/datasets::ro:~/work/ml',
-    volumesNote:
-      'Gardé de ton côté et pas dans le projet, exprès : l\'agent peut écrire dans le projet, et une liste de montages rangée là lui permettrait de monter n\'importe quel dossier de l\'hôte dans sa propre VM. Pour la même raison, une destination relative qui sort du projet avec `..` ou passe par un lien symbolique du projet est ignorée. agent-vm crée le point de montage manquant dans le projet sur ta machine : un `.claude` vide y apparaît donc aussi. Les changements valent pour les nouvelles VM : `--reset` les réapplique.',
     gitTitle: 'Laisser l\'agent commiter',
     gitBody:
       'git lit son identité dans l\'environnement : le fichier d\'env partagé suffit, sans aucun `git config` dans la VM. Les quatre variables sont nécessaires, car git exige un committer et pas seulement un auteur.',
@@ -251,24 +208,13 @@ export const fr: Dictionary = {
       'Ces variables passent avant `git config`, dans tous les dépôts de la VM : pour une identité par dépôt, règle plutôt `user.name` et `user.email` depuis un script de runtime. `gh` lit `GH_TOKEN` de lui-même, donc `gh pr create` fonctionne sans rien d\'autre. Un `git push` en HTTPS a besoin, lui, d\'un credential helper : une ligne `gh auth setup-git` dans ton [script de runtime](#customisation-files).',
     gitHumanTitle: 'Cela dit, garde la main sur les commits',
     gitHumanBody:
-      'Que l\'agent puisse commiter ne veut pas dire qu\'il doit le faire. Un commit signifie que tu as lu le diff : laisse l\'agent écrire le code, relis-le et commite toi-même. Avec un Lima qui [garde les `.git` en lecture seule](#git), c\'est même le seul moyen : l\'agent ne peut pas commiter dans le projet partagé, sauf si tu désactives la protection, ce qui lui donne un moyen de lancer des commandes sur ton hôte.',
-    gitGuardTitle: 'Protéger .git',
-    gitGuardBody:
-      'Git, sur ta machine, exécute ce que désignent le `.git/config` et les hooks d\'un dépôt : `core.fsmonitor` à chaque `git status`, les hooks au commit. Ton éditeur et ton prompt de shell lancent `git status` d\'eux-mêmes : une VM capable d\'écrire dans `.git` pourrait donc lancer des commandes sur ton hôte en quelques secondes, sans que rien n\'apparaisse dans `git diff`. Avec un Lima qui a `sshfs.readonlyNames`, chaque `.git` des partages est en lecture seule pour la VM, à toute profondeur, et c\'est le serveur SFTP de Lima, sur l\'hôte, qui l\'impose : l\'agent lit l\'historique mais ne peut pas commiter. Ce n\'est pas encore intégré en amont ([lima-vm/lima#5529](https://github.com/lima-vm/lima/issues/5529)) : `agent-vm setup` propose une version qui l\'a. Les partages passent alors en `reverse-sshfs`, plus lent sur beaucoup de fichiers (voir [Node.js](#node)).',
-    gitGuardCode:
-      'brew unlink lima; brew install sylvinus/tap/lima-sylvinus\nagent-vm doctor                          # où tu en es\nagent-vm --unsafe-writable-git claude    # commiter quand même\n# sans Homebrew : compiler github.com/sylvinus/lima\n# Windows (Git Bash) : setup propose ce téléchargement ; à la main (AMD64) :\nbase=https://github.com/sylvinus/lima/releases/download/v2.3.0-sylvinus.2\ncurl -fsSLO "$base/lima-2.3.0-sylvinus.2-Windows-AMD64.zip" \\\n     -fsSLO "$base/lima-additional-guestagents-2.3.0-sylvinus.2-Windows-AMD64.zip"\nsha256sum -c <<\'EOF\'   # les sommes fixées par agent-vm\n053f3479b397628b79fe46b0268a50a7f1fc51073691d7d8bce78c9be2ae2787  lima-2.3.0-sylvinus.2-Windows-AMD64.zip\na0828aa4518e21c9519d341be9f32adf07cbeb74a3f8beadaa2f350c45b5933b  lima-additional-guestagents-2.3.0-sylvinus.2-Windows-AMD64.zip\nEOF\nfor z in lima-*-Windows-AMD64.zip; do unzip -q -o "$z" -d ~/.local/share/lima-sylvinus; done\nexport PATH="$HOME/.local/share/lima-sylvinus/bin:$PATH"   # et dans ~/.bash_profile',
-    gitGuardNote:
-      'Chaque `.hg` est aussi en lecture seule, de même que le dossier vers lequel pointe chaque `core.hooksPath` du projet (`.husky` pour husky). Une VM en marche reçoit les nouvelles protections à son prochain démarrage, qu\'agent-vm propose. Le nom `.git` n\'est pas la seule entrée pour autant. Un dossier que la VM remplit des fichiers internes de git (`HEAD`, `objects/`, `refs/`, un `config`) est un dépôt pour git sous n\'importe quel nom, et git lance les commandes que désigne son `config`, comme son pager dès que tu tapes `git log` dans ce dossier : `git config --global safe.bareRepository explicit` fait ignorer ces dossiers par git. Un fichier de config inclus depuis le projet, ou un réglage dont la commande est un fichier du projet, ouvre la même porte. Avant de démarrer une VM aux partages modifiables, agent-vm s\'arrête sur chacun de ceux qu\'il trouve, et sur un Lima sans `readonlyNames`, pour demander s\'il faut continuer : Entrée, ou l\'absence de terminal, annule. Il propose de régler `safe.bareRepository` pour toi. `doctor` les liste, et `info` les nomme pour les scripts. `--unsafe-writable-git`, ou `AGENT_VM_UNSAFE_WRITABLE_GIT=1` dans ton shell, désactive la protection pour que l\'agent puisse commiter, et rouvre ce chemin vers ton hôte : un avertissement le rappelle à chaque lancement.',
-    gitGuardEditor:
-      'Ton éditeur est une porte du même genre. L\'agent peut écrire un `.vscode/tasks.json`, des réglages d\'espace de travail, un `eslint.config.js` ou un `build.rs`, que VS Code et ses extensions peuvent exécuter. Quand VS Code te le demande, laisse le projet non approuvé (mode restreint), et n\'approuve pas un dossier parent : cela approuve tout ce qu\'il contient. Les IDE JetBrains proposent le même choix (Safe Mode). La suite est dans [Sécurité](#what-else-on-your-machine-reads-the-project).',
-    nodeTitle: 'Node.js : node_modules dans la VM',
-    nodeBody:
-      'Des centaines de milliers de fichiers sont lents à travers le partage, et les paquets natifs diffèrent de toute façon entre macOS et Linux. Monte un dossier du disque de la VM par-dessus `node_modules` depuis le [script de runtime](#customisation-files) du projet, lancé à chaque commande :',
-    nodeCode:
-      '#!/bin/bash\n# .agent-vm.runtime.sh\nset -e\nmkdir -p "$HOME/node_modules" node_modules\nmountpoint -q node_modules ||\n  sudo mount --bind "$HOME/node_modules" node_modules',
-    nodeNote: 'L\'hôte voit un `node_modules` vide, ou garde le sien : installe aussi de ce côté si ton éditeur a besoin des paquets. `--reset` et `rm` suppriment la copie de la VM. Dans un workspace, le `node_modules` de la racine contient presque tout (npm remonte les paquets, pnpm garde son store dans `node_modules/.pnpm`) ; répète le montage pour un paquet qui a un gros `node_modules` à lui. Un serveur de dev dans la VM peut avoir besoin du polling pour voir les modifications faites sur l\'hôte (Vite : `server.watch.usePolling`).',
-    refTitle: 'Toutes les commandes',
-    refNote: 'Appelle la commande au lieu de sourcer le fichier : une fonction shell n\'est pas héritée par les processus fils, donc un outil qui lance un shell ne la voit pas.',
+      'Que l\'agent puisse commiter ne veut pas dire qu\'il doit le faire. Un commit signifie que tu as lu le diff : laisse l\'agent écrire le code, relis-le et commite toi-même. Avec `.git` [protégé](#git), c\'est même le seul moyen.',
+  },
+
+  reference: {
+    eyebrow: 'Référence',
+    title: 'Chaque commande, option et fichier.',
+    lede: 'Ce que les sections précédentes laissent de côté : toutes les commandes, les fichiers et variables de configuration, et ce sur quoi un script peut compter.',
     commandGroups: [
       {
         title: 'Lancer un agent',
@@ -277,7 +223,7 @@ export const fr: Dictionary = {
           ['claude [args]', 'Lance Claude Code avec `--dangerously-skip-permissions`.'],
           ['codex [args]', 'Lance Codex CLI avec `--dangerously-bypass-approvals-and-sandbox`.'],
           ['vibe [args]', 'Lance Mistral Vibe avec `--agent auto-approve`.'],
-          ['pi [args]', 'Lance Pi, qui ne demande aucune permission. En option à l\'installation.'],
+          ['pi [args]', 'Lance Pi, qui ne demande aucune permission.'],
         ],
       },
       {
@@ -302,7 +248,7 @@ export const fr: Dictionary = {
         rows: [
           ['install', 'Met `agent-vm` dans ton `PATH`, depuis le clone : `./agent-vm.sh install`. L\'installeur curl le lance pour toi.'],
           ['uninstall', 'Retire ce lien. Les VM et `~/.agent-vm` restent.'],
-          ['setup', 'Crée l\'image de base. Une seule fois.'],
+          ['setup', 'Construit l\'image de base. `--preinstall=LIST` saute l\'assistant ([Ce qu\'il y a dans la VM](#what-is-in-the-vm)) ; `--disk`, `--memory` et `--cpus` la dimensionnent.'],
           ['env <sub>', '`set`, `get`, `has`, `unset`, `list` sur les secrets partagés par toutes les VM.'],
           ['project-env <sub>', 'Mêmes sous-commandes, limitées à ce projet. Prime sur le fichier partagé.'],
           ['help', 'Affiche l\'aide intégrée.'],
@@ -326,64 +272,119 @@ export const fr: Dictionary = {
       ['--cpus N', 'Nombre de CPU. Plafonné à la moitié de l\'hôte, par VM.', 'celui de l\'image (1)'],
       ['--ssh-port N', 'Port fixe sur l\'hôte pour le SSH de la VM, pour les outils qui l\'enregistrent. `0` revient à un nouveau port à chaque démarrage. Redémarre une VM en marche, après confirmation.', 'un nouveau par démarrage'],
       ['--reset', 'Détruit la VM et la re-clone depuis l\'image de base.', 'inactif'],
-      ['--readonly', 'Tous les partages de l\'hôte en lecture seule (projet et volumes), côté hôte. Redémarre une VM en marche, après confirmation.', 'inactif'],
+      ['--readonly', 'Tous les partages de l\'hôte en lecture seule, projet et volumes. Redémarre une VM en marche, après confirmation.', 'inactif'],
       ['--unsafe-writable-git', 'Laisse chaque `.git` modifiable pour que l\'agent puisse commiter, avec un avertissement. Voir [Protéger .git](#git).', 'inactif'],
-      ['--unsafe-disable-security-prompts', 'Continue là où un démarrage s\'arrêterait pour poser une question de sécurité (voir [Protéger .git](#git)), sans proposer de modifier ta config git. Les avertissements restent affichés. Pour les scripts sans terminal ; `AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS=1` dans ton shell fait de même.', 'inactif'],
+      ['--unsafe-disable-security-prompts', 'Continue là où un démarrage s\'arrêterait sur une question de sécurité (voir [Protéger .git](#git)). Les avertissements restent affichés. Équivaut à `AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS=1`.', 'inactif'],
       ['--rm', 'Détruit la VM dès que la commande se termine.', 'inactif'],
-      ['--scratch', 'Une nouvelle VM où rien de ce qui est à toi n\'est monté, ni le projet ni les volumes, supprimée à la fin de la commande, Ctrl-C compris. Sur un terminal, la suppression est d\'abord demandée (oui par défaut) : non ouvre un shell dans la VM, et en sortir repose la question. Le fichier d\'env et le script de runtime du projet restent dehors ; `~/.agent-vm/env` et `runtime.sh` y entrent. La VM du dossier n\'est pas touchée, et plusieurs peuvent tourner en même temps. Une exécution tuée net laisse sa VM derrière elle : la prochaine exécution de `--scratch` la supprime, et `doctor` la signale d\'ici là. Voir [Restreindre la session](#tighten-the-session).', 'inactif'],
+      ['--scratch', 'Une nouvelle VM où rien de ce qui est à toi n\'est monté, supprimée à la fin de la commande (après confirmation sur un terminal). `~/.agent-vm/env` et `runtime.sh` y entrent, les fichiers du projet non. Plusieurs peuvent tourner en même temps.', 'inactif'],
     ],
-  },
-
-
-
-  reference: {
-    eyebrow: 'Référence',
-    title: 'Les détails.',
-    lede: 'Ce que les cartes ci-dessus laissent de côté : les options de l\'installeur, ce que fait setup, les fichiers de configuration et les variables pour les scripts.',
+    envTitle: 'Variables d\'environnement',
+    envNote: 'Lues dans ton shell, jamais dans un fichier du projet.',
+    envHeaders: ['Variable', 'Rôle', 'Défaut'],
+    env: [
+      ['AGENT_VM_STATE_DIR', 'Déplace `~/.agent-vm`, pour des tests, la CI ou une seconde installation, sans déplacer `HOME` (et les VM de Lima avec).', '~/.agent-vm'],
+      ['AGENT_VM_PROJECT_ENV', 'Le fichier d\'env du projet, relatif au projet ou absolu.', '.agent-vm.env'],
+      ['AGENT_VM_PROJECT_RUNTIME', 'Le script de runtime du projet, relatif au projet ou absolu. Hors du projet, c\'est l\'hôte qui le lit.', '.agent-vm.runtime.sh'],
+      ['AGENT_VM_HOST_SHARE', 'CPU et mémoire par VM sont plafonnés à ceux de l\'hôte divisés par ce nombre. `1` : tout l\'hôte.', '2'],
+      ['AGENT_VM_BIN_DIR', 'Où `install` place le lien `agent-vm`.', '~/.local/bin'],
+      ['AGENT_VM_LIMA_DIR', 'Windows : où `setup` installe sa version de Lima.', '~/.local/share/lima-sylvinus'],
+      ['AGENT_VM_QEMU_DIR', 'Windows : où trouver QEMU, s\'il n\'est pas dans le `PATH`.', '/c/Program Files/qemu'],
+      ['AGENT_VM_UNSAFE_WRITABLE_GIT', '`1` : équivaut à `--unsafe-writable-git`.', 'non définie'],
+      ['AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS', '`1` : équivaut à `--unsafe-disable-security-prompts`.', 'non définie'],
+    ],
+    customTitle: 'Fichiers de personnalisation',
+    customLede:
+      'Six fichiers facultatifs, aucun n\'est nécessaire pour démarrer. Ceux propres à l\'utilisateur sont dans `~/.agent-vm/`, ceux propres à un projet dans le projet lui-même.',
+    customTable: {
+      headers: ['Fichier', 'Portée', 'Quand'],
+      rows: [
+        ['~/.agent-vm/env', 'Toutes les VM', 'Copié à chaque lancement'],
+        ['~/.agent-vm/volumes', 'Toutes les VM, ou les projets qu\'une entrée désigne', 'Monté à la création de la VM'],
+        ['~/.agent-vm/setup.sh', 'Image de base', 'Une fois, pendant agent-vm setup'],
+        ['~/.agent-vm/runtime.sh', 'Toutes les VM', 'À chaque commande qui entre dans une VM, en premier'],
+        ['.agent-vm.runtime.sh', 'Un seul projet', 'À chaque commande qui entre dans sa VM, après le global'],
+        ['.agent-vm.env', 'Un seul projet', 'Copié après l\'env partagé, et prioritaire sur lui'],
+      ],
+    },
+    volumesTitle: 'Montages en plus : ~/.agent-vm/volumes',
+    volumesBody:
+      'Une ligne `source[:destination][:mode][:projet]` par montage, `~` développé à gauche, `#` pour les commentaires. Le mode est `ro` (par défaut) ou `rw`, et `rw` ne marche que pour les dossiers. Sans destination, le chemin est monté au même endroit dans la VM ; une destination relative est dans le projet. Le quatrième champ limite l\'entrée aux projets qu\'il désigne, `*` couvrant n\'importe quoi.',
+    volumesCode:
+      '# ~/.agent-vm/volumes\n~/.gitconfig    # même chemin, lecture seule\n~/.cache/shared:/home/you.guest/.cache/shared:rw\n\n# seulement dans ~/work/webapp, en .claude, lecture seule\n~/.claude-vm/webapp:.claude:ro:~/work/webapp\n\n# tous les projets sous ~/work\n~/.cache/pip:/home/you.guest/.cache/pip:rw:~/work/*\n\n# même chemin, un seul projet\n~/datasets::ro:~/work/ml',
+    volumesNote:
+      'La liste reste de ton côté, pas dans le projet : l\'agent écrit dans le projet, et pourrait sinon monter n\'importe quel dossier de l\'hôte dans sa VM. Une destination relative qui sort du projet, par `..` ou un lien symbolique, est ignorée. Les changements valent pour les nouvelles VM : `--reset` les réapplique.',
+    nodeTitle: 'Node.js : node_modules dans la VM',
+    nodeBody:
+      'Des centaines de milliers de fichiers sont lents à travers le partage, et les paquets natifs diffèrent de toute façon entre macOS et Linux. Monte un dossier du disque de la VM par-dessus `node_modules` depuis le [script de runtime](#customisation-files) du projet, lancé à chaque commande :',
+    nodeCode:
+      '#!/bin/bash\n# .agent-vm.runtime.sh\nset -e\nmkdir -p "$HOME/node_modules" node_modules\nmountpoint -q node_modules ||\n  sudo mount --bind "$HOME/node_modules" node_modules',
+    nodeNote: 'L\'hôte voit un `node_modules` vide, ou garde le sien : installe aussi de ce côté si ton éditeur a besoin des paquets. Dans un workspace, répète le montage pour un paquet qui a un gros `node_modules` à lui. Un serveur de dev dans la VM peut avoir besoin du polling pour voir les modifications faites sur l\'hôte (Vite : `server.watch.usePolling`).',
+    scriptsTitle: 'Depuis un script',
+    scriptsParas: [
+      'Passe par ces commandes plutôt que de parser la sortie destinée aux humains ou de lire `~/.agent-vm` : les noms de VM et les fichiers d\'état sont des détails d\'implémentation. Toutes fonctionnent sans Lima.',
+      '`version --min` renvoie `0` si la version suffit, `1` si elle est plus ancienne, `2` pour un appel mal formé ; un moteur antérieur à `--min` l\'ignore et renvoie `0`. Dans `info`, les booléens valent `1` ou `0`, `unknown` quand c\'est indéterminable, et `base_exists=1` veut dire que l\'image est utilisable.',
+      'Un démarrage ne pose ses questions que si la sortie d\'erreur est un terminal : sinon, il s\'arrête là. `security_questions` dans `info` les nomme à l\'avance (`lima`, `lima-unknown`, `hooks`, `git-config`, `bare-repo` ou `none`), et `--unsafe-disable-security-prompts` les accepte une fois l\'accord de l\'utilisateur obtenu.',
+    ],
+    scriptsCode:
+      'agent-vm version --min 0.2.0 || exit 1  # silencieux si OK\nagent-vm name [dir]    # nom de la VM d\'un dossier\nagent-vm info [dir]    # une paire clé=valeur par ligne\n\n# clés de info : version, template, state_dir,\n# project_env, dir, vm_name, base_exists,\n# vm_exists, vm_running, vm_stale,\n# ssh_host, ssh_config, git_protected,\n# security_questions',
     groups: [
       {
-        title: 'Installation et setup',
+        title: 'Installation et mise à jour',
         topics: [
           {
             title: 'Options de l\'installeur',
             paras: [
-              'Les options se placent après `sh -s --` : `--version X.Y.Z`, `--git` pour un clone de `main`, `--dir DIR` pour un autre emplacement que `~/.local/share/agent-vm` (ou `$XDG_DATA_HOME/agent-vm`). Pour lire l\'installeur d\'abord, télécharge-le, puis lance-le avec `sh`.',
-              'Il se termine par `agent-vm install`, qui place un lien `agent-vm` dans `~/.local/bin` (`AGENT_VM_BIN_DIR` le change), ou un petit lanceur là où Git Bash ne crée pas de liens. La commande marche depuis n\'importe quel shell, fish compris : la ligne `source .../agent-vm.sh` que les versions précédentes ajoutaient à ton rc de shell ne sert plus, et `install` le signale quand il la trouve. `./install.sh` reste, pour l\'instant, comme raccourci.',
+              'Les options se placent après `sh -s --` : `--version X.Y.Z`, `--git` pour un clone de `main`, `--dir DIR` au lieu de `~/.local/share/agent-vm`. Pour lire l\'installeur d\'abord, télécharge-le, puis lance-le avec `sh`.',
             ],
             list: [],
-            code: 'curl -fsSL https://www.agent-vm.org/install.sh | sh -s -- --dir ~/tools/agent-vm\ncurl -fsSLO https://www.agent-vm.org/install.sh && sh install.sh',
+            code: 'curl -fsSL https://www.agent-vm.org/install.sh |\n  sh -s -- --dir ~/tools/agent-vm\n\n# le lire d\'abord\ncurl -fsSLO https://www.agent-vm.org/install.sh\nsh install.sh',
           },
           {
-            title: 'Ce que fait setup',
+            title: 'Mettre à jour',
             paras: [
-              'L\'assistant propose d\'abord la sélection par défaut ; réponds `n` pour être interrogé composant par composant. La création de la VM (le premier lancement télécharge une image Debian) et l\'installation des paquets n\'affichent que leurs 10 dernières lignes, sur place ; la sortie complète va dans `~/.agent-vm/setup.log`.',
-              'Les noms `mcp-*` branchent un serveur MCP dans chaque agent installé, sauf Pi, qui n\'a pas de support MCP. Laisse-les de côté pour ne pas toucher à la config MCP des agents, quand les serveurs MCP se gèrent projet par projet. `mcp-playwright` n\'entraîne pas `node` : ajoute-le aussi.',
-              'Relancer `setup` reconstruit l\'image de base, pas les VM existantes : agent-vm prévient quand une VM vient d\'une image plus ancienne, et `--reset` la reclone. Un `setup` interrompu laisse une image inutilisable, que `info` signale par `base_exists=0` : relance `setup`.',
+              'Relance l\'installeur curl, `brew upgrade agent-vm`, ou `git pull` dans un clone. `agent-vm uninstall` retire le lien ; les VM et `~/.agent-vm` restent.',
+              'Relancer `setup` reconstruit l\'image de base, pas les VM qui en sont clonées : agent-vm les signale, et `--reset` en reclone une. Son journal complet est dans `~/.agent-vm/setup.log`.',
+              'Depuis la 0.1.0, lance `agent-vm setup` : d\'ici là, chaque VM issue d\'une base construite par la 0.1.0 redémarre une fois de plus pour installer `sshfs`.',
             ],
             list: [],
             code: '',
           },
           {
-            title: 'Windows, WSL et chemins',
+            title: 'Windows et WSL',
             paras: [
-              'Sous Windows, `setup` installe la version de Lima dans `~/.local/share/lima-sylvinus` (`AGENT_VM_LIMA_DIR` la déplace) et cherche QEMU dans `/c/Program Files/qemu` quand il n\'est pas dans le `PATH` (`AGENT_VM_QEMU_DIR` indique un autre dossier).',
-              'Sous WSL2, KVM demande la virtualisation imbriquée, que l\'hôte Windows doit laisser passer ; WSL1 ne peut pas faire tourner de VM. `setup` et `doctor` disent dans quel cas tu es.',
-              'Lima ne sait pas monter un chemin qui contient un espace, et agent-vm le refuse, comme un chemin avec un guillemet, une barre oblique inverse ou un caractère de contrôle. Les chemins d\'iCloud Drive contiennent des espaces : passe par un lien symbolique.',
+              'Les VM ont besoin de la fonctionnalité Windows Hypervisor Platform. Elle est désactivée par défaut et seul un administrateur peut l\'activer, une fois, dans les Fonctionnalités de Windows ou avec la commande ci-dessous, puis un redémarrage. Sur un portable géré, c\'est une demande au service informatique.',
+              'Sous WSL2, KVM demande la virtualisation imbriquée, transmise par l\'hôte Windows ; WSL1 ne peut pas faire tourner de VM.',
             ],
             list: [],
-            code: 'ln -s ~/Library/Mobile\\ Documents/com~apple~CloudDocs/Dev ~/Dev\ncd ~/Dev/ton-projet && agent-vm claude',
+            code: '# dans PowerShell en administrateur, puis redémarrer\nDISM /Online /Enable-Feature `\n  /FeatureName:HypervisorPlatform /All',
+          },
+          {
+            title: 'Chemins',
+            paras: [
+              'Les chemins avec un espace, un guillemet, une barre oblique inverse ou un caractère de contrôle sont refusés. Les chemins d\'iCloud Drive contiennent des espaces : passe par un lien symbolique.',
+            ],
+            list: [],
+            code: 'ln -s ~/Library/Mobile\\ Documents/com~apple~CloudDocs/Dev \\\n  ~/Dev\ncd ~/Dev/ton-projet && agent-vm claude',
+          },
+          {
+            title: 'Ports et doctor',
+            paras: [
+              'Un port fixé avec `--ssh-port` reste jusqu\'à `--reset` ou `rm`. `doctor` n\'affiche aucun secret : sa sortie peut aller telle quelle dans une issue.',
+            ],
+            list: [],
+            code: '',
           },
         ],
       },
       {
-        title: 'Agents',
+        title: 'Agents et configuration',
         topics: [
           {
             title: 'Comment chaque agent est lancé',
             paras: [
-              'Claude Code reçoit aussi le mode sans confirmation par des réglages gérés (`/etc/claude-code/managed-settings.json`) : il perd l\'option de ligne de commande quand il se relance lui-même ([#72479](https://github.com/anthropics/claude-code/issues/72479)). Le `--auto` d\'OpenCode accepte toute demande qui n\'est pas explicitement refusée. Pour Pi, setup règle `defaultProjectTrust: "always"`, pour que les extensions et skills du `.pi/` d\'un projet se chargent.',
-              'Connecte-toi dans la VM (`claude login`, `gh auth login`) : la connexion reste dans cette VM. Monter tes identifiants de l\'hôte à la place donnerait ta connexion principale à tout ce qui tourne dans la VM.',
-              'Lima transmet `COLORTERM` à la VM. Un terminal en couleurs 24 bits qui ne le définit pas (Terminal.app sous macOS 26, parfois) a besoin de `export COLORTERM=truecolor`.',
+              'Claude Code reçoit aussi le mode sans confirmation par des réglages gérés, car il perd l\'option quand il se relance lui-même ([#72479](https://github.com/anthropics/claude-code/issues/72479)). Pour Pi, setup règle `defaultProjectTrust: "always"`.',
+              'Connecte-toi dans la VM (`claude login`, `gh auth login`) : la connexion reste dans cette VM. Monter tes identifiants de l\'hôte les donnerait à tout ce qui y tourne.',
+              'Un terminal en couleurs 24 bits qui ne définit pas `COLORTERM` (Terminal.app sous macOS 26) a besoin de `export COLORTERM=truecolor`.',
             ],
             list: [],
             code: '',
@@ -391,24 +392,17 @@ export const fr: Dictionary = {
           {
             title: 'Serveurs MCP',
             paras: [
-              'Playwright MCP tourne avec `--executable-path /usr/bin/chromium` et `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` : il ne télécharge aucun navigateur à lui. Pour un autre moteur, modifie son entrée (retire `--executable-path`, ajoute `--browser firefox`) et lance `npx playwright install firefox` dans la VM.',
-              'Pour ajouter un serveur à Claude Code, ajoute-le à `mcpServers` dans `~/.claude.json`, depuis `~/.agent-vm/setup.sh` ou dans une VM.',
+              'Playwright MCP utilise le Chromium de la VM et ne télécharge aucun navigateur. Pour un autre moteur, modifie son entrée (retire `--executable-path`, ajoute `--browser firefox`) et lance `npx playwright install firefox`. Ajoute tes propres serveurs à `mcpServers` dans `~/.claude.json`, depuis `~/.agent-vm/setup.sh` ou dans une VM.',
             ],
             list: [],
-            code: '{\n  "mcpServers": {\n    "postgres": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost:5432/mydb"]\n    }\n  }\n}',
+            code: '{\n  "mcpServers": {\n    "postgres": {\n      "command": "npx",\n      "args": [\n        "-y",\n        "@modelcontextprotocol/server-postgres",\n        "postgresql://localhost:5432/mydb"\n      ]\n    }\n  }\n}',
           },
-        ],
-      },
-      {
-        title: 'Configuration',
-        topics: [
           {
             title: 'Les fichiers d\'environnement',
             paras: [
-              'Des lignes `CLÉ=valeur`, `#` pour les commentaires, poussées dans la VM à chaque commande : une modification n\'a pas besoin de `--reset`. agent-vm ne connaît aucun des noms : `gh` lit `GH_TOKEN`, Claude Code `ANTHROPIC_API_KEY` quand il n\'est pas connecté, Codex `OPENAI_API_KEY`, Vibe `MISTRAL_API_KEY`.',
-              'Tout ce qui tourne dans la VM peut les lire, l\'agent et ses dépendances compris, et les envoyer ailleurs. Mets-y des jetons dédiés, au périmètre étroit, que tu peux révoquer.',
-              'Le fichier du projet, `.agent-vm.env` (`AGENT_VM_PROJECT_ENV` le déplace, relatif au projet ou absolu), est poussé après le fichier partagé et l\'emporte. Il est dans un dépôt, donc pas de secret dedans : `project-env set` affiche la ligne qui l\'ignore dans git, ou le `git rm --cached` quand il est déjà suivi. La VM peut en faire un lien symbolique : c\'est donc elle qui le lit à chaque démarrage, et `project-env` refuse un lien, vérifié avec `perl` pour que la VM ne puisse pas le devancer.',
-              '`get` et `has` lisent le fichier, jamais l\'environnement, et ne l\'exécutent jamais. Ils acceptent ce qu\'écrit `set` et les lignes dotenv simples (`CLÉ=valeur`, `export`, guillemets, commentaire en fin de ligne). Une valeur qui demande un shell (`$`, accents graves, barres obliques inverses, `~`, `;`, `|`...) sort avec le code `2`, comme une clé qui apparaît après une telle ligne : le shell peut lire les lignes suivantes autrement. `set` réécrit une valeur sous une forme qu\'ils lisent. Sans valeur, `set` la lit sur l\'entrée standard, ou te la fait taper sans l\'afficher : un secret reste ainsi hors de l\'historique de ton shell.',
+              'agent-vm ne connaît aucun des noms : `gh` lit `GH_TOKEN`, Claude Code `ANTHROPIC_API_KEY`, Codex `OPENAI_API_KEY`, Vibe `MISTRAL_API_KEY`. Une modification n\'a pas besoin de `--reset`.',
+              'Le `.agent-vm.env` du projet est poussé après le fichier partagé et l\'emporte. Il est dans un dépôt, donc pas de secret dedans : `project-env set` affiche la ligne qui l\'ignore dans git.',
+              '`get` et `has` lisent le fichier sans l\'exécuter, et sortent avec le code `2` sur une valeur qui demande un shell. `set` sans valeur te la fait taper sans l\'afficher, hors de l\'historique de ton shell.',
             ],
             list: [],
             code: '',
@@ -416,9 +410,8 @@ export const fr: Dictionary = {
           {
             title: 'Montages supplémentaires, en détail',
             paras: [
-              'Une destination est prise telle quelle, sans `~` : le dossier personnel dans la VM est `/home/<toi>.guest` (Lima 2.1 et suivants, `.linux` avant). Une source qui n\'existe pas est ignorée, avec un avertissement. `rw` ne marche que pour les dossiers. Une destination nommée `ro` ou `rw` demande un mode explicite après elle, et une destination ne peut pas contenir `:`.',
-              'Un fichier seul est lié en dur dans `~/.agent-vm/file-mounts/<vm>/` puis monté dans la VM, sans son dossier. D\'un système de fichiers à l\'autre, il est copié à la place, et les modifications de l\'hôte attendent le démarrage suivant.',
-              'Un point de montage manquant dans le projet est créé sans suivre de lien symbolique, ce qui demande `perl`.',
+              'Une destination est prise telle quelle, sans `~` : le dossier personnel dans la VM est `/home/<toi>.guest` (`.linux` avant Lima 2.1). Une source absente est ignorée, avec un avertissement.',
+              'Un fichier seul est lié en dur dans `~/.agent-vm/file-mounts/<vm>/` puis monté. D\'un système de fichiers à l\'autre, il est copié, et les modifications de l\'hôte attendent le démarrage suivant.',
             ],
             list: [],
             code: '# ~/.agent-vm/volumes : tes instructions et skills Claude,\n# pas tout ~/.claude, qui contient ta connexion sous Linux\n~/.claude/CLAUDE.md:/home/toi.guest/.claude/CLAUDE.md\n~/.claude/skills:/home/toi.guest/.claude/skills',
@@ -426,37 +419,11 @@ export const fr: Dictionary = {
           {
             title: 'Scripts de setup et de runtime',
             paras: [
-              '`~/.agent-vm/setup.sh` tourne une fois, dans l\'image de base, à la fin de `setup`, en tant qu\'utilisateur de la VM avec sudo. `~/.agent-vm/runtime.sh` tourne dans la VM à chaque commande qui y entre, puis le `.agent-vm.runtime.sh` du projet : les deux doivent pouvoir être relancés. [`runtime.example.sh`](https://github.com/sylvinus/agent-vm/blob/main/runtime.example.sh) couvre l\'identité git, `gh auth setup-git`, les skills, les serveurs MCP et une ligne d\'état. Pas de clé privée dedans : l\'agent peut lire tout ce qu\'ils mettent en place.',
-              '`setup.sh` tourne sous zsh. Un script de runtime tourne sous le shell que nomme sa première ligne (bash ou sh, zsh sinon). Les deux sont lus sur l\'entrée standard : `$0` est le shell, et une commande du script qui lit l\'entrée standard lit la suite du script ; donne-lui `</dev/null`.',
-              '`AGENT_VM_PROJECT_RUNTIME` déplace le script du projet, relatif au projet ou absolu, `..` résolu comme le fait `cd`. Dans le projet, c\'est la VM qui le lit ; en dehors, l\'hôte. mise reprend `.ruby-version`, `.python-version`, `.node-version` et `.tool-versions`.',
+              '`~/.agent-vm/setup.sh` tourne une fois dans l\'image, à la fin de `setup`, sous zsh avec sudo. `~/.agent-vm/runtime.sh`, puis le `.agent-vm.runtime.sh` du projet, tournent à chaque commande qui entre dans la VM : les deux doivent pouvoir être relancés. [`runtime.example.sh`](https://github.com/sylvinus/agent-vm/blob/main/runtime.example.sh) couvre l\'identité git, `gh auth setup-git`, les skills et les serveurs MCP.',
+              'Ils sont lus sur l\'entrée standard : donne `</dev/null` à une commande qui la lit. Pas de clé privée dedans, l\'agent peut lire ce qu\'ils mettent en place.',
             ],
             list: [],
             code: '# .agent-vm.runtime.sh\nmise install\nnpm install\ndocker compose up -d',
-          },
-        ],
-      },
-      {
-        title: 'Exploitation et scripts',
-        topics: [
-          {
-            title: 'Ressources, ports, doctor',
-            paras: [
-              'Processeurs et mémoire sont plafonnés à la moitié de l\'hôte par VM, avec un avertissement. `AGENT_VM_HOST_SHARE` change le diviseur (`1` pour tout l\'hôte) ; quand la capacité de l\'hôte ne peut pas être lue, rien n\'est plafonné.',
-              'Un port fixé avec `--ssh-port` reste jusqu\'à `--reset` ou `rm`. Un port déjà fixé pour une autre VM Lima est refusé ; un port pris par autre chose fait échouer le démarrage. La VM doit tourner pour que SSH se connecte.',
-              '`doctor` n\'affiche aucun secret : sa sortie peut aller telle quelle dans une issue. Il sort avec le code `1` quand une vérification échoue.',
-            ],
-            list: [],
-            code: '',
-          },
-          {
-            title: 'Pour les intégrateurs',
-            paras: [
-              '`AGENT_VM_STATE_DIR` déplace `~/.agent-vm`, pour un test, un job de CI ou une seconde installation, sans déplacer `HOME` (qui déplacerait aussi les VM de Lima). Relis-le dans `info` (`state_dir=`) plutôt que depuis `$HOME`.',
-              '`base_exists=1` veut dire que l\'image de base est utilisable, pas seulement listée par Lima. `agent-vm.sh` peut être sourcé sous `set -u` et `pipefail`, pas sous `set -e`.',
-              'Un démarrage pose ses questions sur le terminal, et seulement quand la sortie d\'erreur en est un aussi : un outil qui capture cette sortie reçoit la réponse « non », et le démarrage s\'arrête. `security_questions=` dans `info` dit à l\'avance sur quoi s\'arrêterait le démarrage d\'une VM qui ne tourne pas (`lima`, `lima-unknown`, `hooks`, `git-config`, `bare-repo`, ou `none`), et `git_protected=` si `.git` serait en lecture seule. Passe `--unsafe-disable-security-prompts` pour continuer malgré tout, une fois que l\'utilisateur a donné son accord.',
-            ],
-            list: [],
-            code: '',
           },
         ],
       },
@@ -468,6 +435,39 @@ export const fr: Dictionary = {
     title: 'Ce qui traverse la frontière.',
     lede: 'La VM ne peut pas sortir de ses partages. Reste ce qui les traverse : le dossier du projet, que l\'agent écrit et que ta machine lit, le terminal et le réseau.',
     groups: [
+      {
+        id: 'git',
+        title: 'Protéger .git',
+        topics: [
+          {
+            title: 'Pourquoi .git',
+            paras: [
+              'Git, sur ta machine, exécute ce que désignent le `.git/config` et les hooks d\'un dépôt : `core.fsmonitor` à chaque `git status`, les hooks au commit. Ton éditeur et ton prompt lancent `git status` d\'eux-mêmes : une VM capable d\'écrire dans `.git` pourrait lancer des commandes sur ton hôte en quelques secondes, sans que rien n\'apparaisse dans `git diff`.',
+              'Avec un Lima qui a `sshfs.readonlyNames`, chaque `.git` et `.hg` des partages est en lecture seule pour la VM, à toute profondeur, et c\'est le serveur SFTP de Lima, sur l\'hôte, qui l\'impose. L\'agent lit l\'historique mais ne peut pas commiter. Ce n\'est pas encore intégré en amont ([lima-vm/lima#5529](https://github.com/lima-vm/lima/issues/5529)) : `agent-vm setup` propose une version qui l\'a. Les partages passent alors en `reverse-sshfs`, plus lent sur beaucoup de fichiers (voir [Node.js](#node)).',
+            ],
+            list: [],
+            code: 'brew unlink lima; brew install sylvinus/tap/lima-sylvinus\nagent-vm doctor    # où tu en es\n\n# laisser l\'agent commiter quand même\nagent-vm --unsafe-writable-git claude',
+          },
+          {
+            title: 'Au-delà du nom .git',
+            paras: [
+              'Le dossier vers lequel pointe un `core.hooksPath` du projet (`.husky` pour husky) est aussi en lecture seule. Un dossier qui contient les fichiers internes de git (`HEAD`, `objects/`, `refs/`, un `config`) est un dépôt sous n\'importe quel nom : régler `safe.bareRepository` à `explicit` dans ta config git globale le fait ignorer par git. Une config incluse depuis le projet, ou des hooks à la racine d\'un dépôt, ouvrent la même porte.',
+              'Avant de démarrer une VM aux partages modifiables, agent-vm s\'arrête sur chacun de ceux qu\'il trouve, et sur un Lima sans `readonlyNames`, pour demander : Entrée, ou l\'absence de terminal, annule. `doctor` les liste. `--unsafe-writable-git` (ou `AGENT_VM_UNSAFE_WRITABLE_GIT=1` dans ton shell, jamais lu depuis le projet) laisse l\'agent commiter et rouvre ce chemin vers ton hôte, avec un avertissement à chaque lancement.',
+            ],
+            list: [],
+            code: '',
+          },
+          {
+            title: 'La version de Lima',
+            paras: [
+              'Sous Windows, `setup` la télécharge et la vérifie avec des sommes de contrôle fixées dans agent-vm. Ailleurs, Homebrew l\'installe, ou compile-la depuis les sources.',
+              'Un Lima dont agent-vm ne sait pas lire la réponse arrête le démarrage sur une erreur, plutôt que de passer pour un Lima sans `readonlyNames`.',
+            ],
+            list: [],
+            code: '# revenir au Lima de Homebrew\nbrew uninstall lima-sylvinus && brew link lima\n\n# la version de Lima, sans Homebrew (Go et make nécessaires)\ngit clone --depth 1 -b v2.3.0-sylvinus.2 https://github.com/sylvinus/lima\ncd lima && make native && sudo make install',
+          },
+        ],
+      },
       {
         title: 'Ce que fait agent-vm',
         topics: [
@@ -481,15 +481,13 @@ export const fr: Dictionary = {
             code: '',
           },
           {
-            title: '--readonly et .git, en détail',
+            title: '--readonly, en détail',
             paras: [
-              '`--readonly` couvre tous les partages, volumes `rw` compris, avec un avertissement qui les nomme : un volume accessible en écriture contenant le projet serait une seconde entrée. L\'hôte l\'impose-t-il ? agent-vm le déduit de ce que Lima rapporte sur la VM, jamais en interrogeant l\'invité. Il garde la trace des montages donnés à chaque VM, si bien qu\'une VM qui a encore un partage en écriture est modifiée ; une VM arrêtée reçoit le mode avant de démarrer.',
-              'Chaque `.git` est en lecture seule à toute profondeur, quelle que soit la casse du nom. `git status`, `diff` et `log` marchent dans la VM ; `commit`, non. Chaque `.hg` l\'est aussi, pour les hooks de Mercurial.',
-              'Quand le `core.hooksPath` de git place les hooks dans le projet (husky règle `.husky/_`), le premier dossier de ce chemin, depuis la racine de son dépôt, est lui aussi en lecture seule, par son nom et à toute profondeur comme `.git` : l\'agent ne peut pas changer les hooks que git lance à tes commits. Un nom qui ne commence pas par un point (`tools` pour `tools/hooks`) verrouillerait tous les dossiers de ce nom dans le projet : le démarrage demande donc d\'abord, oui par défaut. Des hooks à la racine d\'un dépôt ne peuvent pas être protégés ainsi : le démarrage s\'arrête donc dessus, comme sur les autres risques plus haut. Sont examinés le dépôt qui contient le projet et ceux jusqu\'à deux niveaux en dessous, à chaque démarrage : `doctor` dit si la VM a ces noms.',
-              'Un Lima dont agent-vm ne sait pas lire la réponse (un `limactl validate` qui échoue, une formulation inconnue) arrête le démarrage sur une erreur, plutôt que d\'être pris pour un Lima sans `readonlyNames`, ce qui retirerait la protection de tes VM ; `--readonly`, `--unsafe-writable-git` et `--scratch` démarrent quand même. Les variables `AGENT_VM_UNSAFE_*` doivent valoir exactement `1`, et sont lues dans ton shell, jamais dans un fichier du projet. Un outil qui charge des variables d\'environnement depuis le projet au `cd` (le `[env]` de mise, par exemple) peut toutefois les définir : voir [mise](#shell-commands-hooks) plus bas. Avec un Lima sans `readonlyNames`, une VM revient au type de montage par défaut de Lima à son démarrage suivant, car `reverse-sshfs` sans cette option est le moins sûr des deux. Revenir au Lima de Homebrew : `brew uninstall lima-sylvinus && brew link lima`.',
+              '`--readonly` couvre tous les partages, volumes `rw` compris : un volume accessible en écriture contenant le projet serait une seconde entrée. agent-vm déduit de ce que Lima rapporte si l\'hôte l\'impose, jamais en interrogeant l\'invité. Là où ce ne serait pas le cas (`reverse-sshfs` sans `readonlyNames`, virtiofs sous QEMU), l\'option est refusée.',
+              'Une VM en marche dans l\'autre mode est redémarrée, après confirmation. Refusé, ou sans terminal, la commande échoue : la VM en lecture seule d\'une autre session ne repasse jamais en écriture sous elle.',
             ],
             list: [],
-            code: '# la version de Lima, sans Homebrew (Go et make nécessaires)\ngit clone --depth 1 -b v2.3.0-sylvinus.2 https://github.com/sylvinus/lima\ncd lima && make native && sudo make install',
+            code: '',
           },
         ],
       },
@@ -499,34 +497,34 @@ export const fr: Dictionary = {
           {
             title: 'La règle',
             paras: [
-              'L\'agent écrit dans le dossier du projet : tout ce qui, sur ta machine, le lit et agit selon ce qu\'il y trouve peut exécuter ce que l\'agent a écrit. agent-vm ferme ce que presque toutes les machines ont et qui se lance sans que tu fasses rien : git, par `.git`, `.hg`, les dossiers de hooks et la config git (voir [Protéger .git](#git)). Il ne peut pas connaître tes autres outils, ni verrouiller les fichiers qu\'ils lisent sans empêcher l\'agent de travailler : il doit pouvoir écrire `.vscode/`, `docker-compose.yml` ou `mise.toml`.',
-              'Donc, sur ta machine, ouvre le projet dans ton éditeur et utilise git dedans ; lance tout le reste dans la VM, avec `agent-vm run`. Les listes qui suivent sont des exemples, classés selon ce qui les déclenche, pas un inventaire complet : compare-les à ta propre installation.',
+              'Tout ce qui, sur ta machine, lit le projet et agit selon ce qu\'il y trouve peut exécuter ce que l\'agent a écrit. agent-vm ferme les portes de git (voir [Protéger .git](#git)), mais ne peut pas verrouiller les fichiers que lisent tes autres outils sans empêcher l\'agent de travailler.',
+              'Donc, sur ta machine, ouvre le projet dans ton éditeur et utilise git dedans ; lance tout le reste dans la VM, avec `agent-vm run`. Les listes qui suivent sont des exemples, pas un inventaire.',
             ],
             list: [
-              'Rien du tout : ce qui se lance quand tu fais `cd` dans le dossier, quand ton prompt se redessine, quand ton éditeur l\'ouvre ou qu\'un gestionnaire de fichiers l\'affiche. Le cas le plus dangereux, puisque tu ne décides jamais rien.',
-              'Un geste que tu fais de toute façon : `git commit` lance des hooks dont les commandes sont dans l\'arborescence, `docker compose up` monte ce que nomme le fichier compose, ton dossier personnel compris.',
-              'Lancer du code du projet : `npm test`, `make`, un build. C\'est par définition le code de l\'agent : sa place est dans la VM.',
+              'Rien du tout : ce qui se lance quand tu fais `cd` dans le dossier, quand ton prompt se redessine, quand ton éditeur l\'ouvre. Le cas le plus dangereux.',
+              'Un geste que tu fais de toute façon : `git commit` lance des hooks rangés dans l\'arborescence, `docker compose up` monte ce que nomme le fichier compose.',
+              'Lancer du code du projet : `npm test`, `make`, un build. C\'est le code de l\'agent : lance-le dans la VM.',
             ],
             code: '',
           },
           {
             title: 'Garder ton dépôt hors d\'atteinte',
             paras: [
-              'Pour ne plus avoir à te poser la question, ne donne pas à agent-vm le dépôt dans lequel tu travailles. Clone le projet une seconde fois, lance agent-vm dans ce clone, et rapatrie son travail dans ton dépôt avec `git fetch` une fois le diff relu. Ton éditeur, ton prompt et tes habitudes restent dans un dossier que la VM ne peut pas écrire, et rien de ce que tu utilises n\'ouvre le dossier de l\'agent par réflexe. `git fetch` lit des objets sans les extraire : les fichiers de l\'agent n\'arrivent dans ton arborescence qu\'au moment où tu fusionnes. Il fait tout de même tourner git dans le `.git` du clone : cela tient donc avec un Lima qui garde les `.git` en lecture seule. Sans lui, la VM peut aussi écrire ce `.git`, et la documentation de git déconseille de récupérer, sous ton propre compte, depuis un `.git` que quelqu\'un d\'autre peut écrire.',
+              'Ne donne pas à agent-vm le dépôt dans lequel tu travailles. Clone le projet une seconde fois, lance agent-vm dans ce clone, et rapatrie son travail avec `git fetch` une fois le diff relu. `git fetch` n\'extrait aucun fichier : ceux de l\'agent n\'arrivent dans ton arborescence qu\'à la fusion. Il faut pour cela un Lima qui garde les `.git` en lecture seule : sinon, la VM peut écrire le `.git` du clone, que git lit ensuite.',
             ],
             list: [],
-            code: '# une fois ; --no-local copie les objets au lieu de les lier en dur\ngit clone --no-local ~/work/app ~/agent/app\n# l\'agent travaille là\ncd ~/agent/app && agent-vm claude\n# de retour dans ton dépôt, une fois qu\'il a fini\ncd ~/work/app\ngit fetch ~/agent/app HEAD:agent/review\ngit diff ...agent/review     # relis tout, .vscode/ et package.json compris\ngit merge agent/review',
+            code: '# une fois ; --no-local copie, sans liens en dur\ngit clone --no-local ~/work/app ~/agent/app\n# l\'agent travaille là\ncd ~/agent/app && agent-vm claude\n# de retour dans ton dépôt, une fois qu\'il a fini\ncd ~/work/app\ngit fetch ~/agent/app HEAD:agent/review\ngit diff ...agent/review   # relis tout\ngit merge agent/review',
           },
           {
             title: 'Éditeurs et agents',
             paras: [
-              'Tout ce qui tourne dans le projet sur ta machine peut exécuter du code écrit par l\'agent. Un fichier suivi modifié apparaît dans `git diff`, un nouveau comme non suivi ; un fichier dans un chemin ignoré (`node_modules`, `.venv`, `target/`) n\'apparaît nulle part.',
+              'Un fichier suivi modifié apparaît dans `git diff`, un nouveau comme non suivi ; un fichier dans un chemin ignoré (`node_modules`, `.venv`, `target/`) n\'apparaît nulle part.',
             ],
             list: [
-              'VS Code : ouvre les projets agent-vm en mode restreint (« Non, je ne fais pas confiance aux auteurs »), et n\'approuve pas un dossier parent, ce qui approuve tout ce qu\'il contient. Un espace de travail approuvé lance des tâches et des extensions qui exécutent du code du projet : `eslint.config.js`, `vite.config.ts`, `build.rs` via rust-analyzer, l\'interpréteur Python que nomment les réglages.',
+              'VS Code : ouvre les projets agent-vm en mode restreint, et n\'approuve pas un dossier parent. Un espace de travail approuvé exécute du code du projet par ses tâches et extensions : `eslint.config.js`, `vite.config.ts`, `build.rs`.',
               'IDE JetBrains : « Preview in Safe Mode ». Un projet approuvé lance ses scripts Gradle ou Maven à l\'import.',
-              'Neovim demande avant de lancer le `.nvim.lua` ou le `.exrc` d\'un projet (`exrc`, désactivé par défaut), et de nouveau quand il change ; Vim ne demande pas, laisse donc `exrc` désactivé. Emacs demande avant d\'appliquer des valeurs risquées d\'un `.dir-locals.el`.',
-              'Les agents sur ta machine lisent une configuration de projet qui lance des commandes : hooks de `.claude/settings.json`, `.mcp.json`, `.cursor/`. Relis-les avant d\'en lancer un là, et considère `CLAUDE.md` et `AGENTS.md` comme écrits par la VM.',
+              'Vim : laisse `exrc` désactivé. Neovim et Emacs demandent avant d\'exécuter la config d\'un projet.',
+              'Les agents sur ta machine lancent des commandes depuis les hooks de `.claude/settings.json`, `.mcp.json` ou `.cursor/` : relis-les, et considère `CLAUDE.md` et `AGENTS.md` comme écrits par la VM.',
             ],
             code: '',
           },
@@ -535,11 +533,10 @@ export const fr: Dictionary = {
             paras: [],
             list: [
               'direnv ne charge qu\'un `.envrc` que tu as autorisé, et une modification retire l\'autorisation.',
-              'mise fait confiance à une configuration selon son chemin : l\'agent peut modifier un `mise.toml` approuvé, et ton shell lance ses hooks et définit son environnement au `cd` suivant, variables d\'agent-vm comprises. `mise settings set paranoid true` lie la confiance au contenu.',
-              'Mercurial lance les hooks du `.hg/hgrc` d\'un dépôt qui t\'appartient, ce qui est le cas des fichiers écrits à travers le partage. Avec un Lima qui garde les `.git` en lecture seule, chaque `.hg` l\'est aussi.',
-              '`npm run`, `make`, `./gradlew`, `pytest` (`conftest.py`), `node_modules/.bin`, un `.venv` activé : chacun lance des fichiers que l\'agent peut écrire. Lance-les dans la VM, avec `agent-vm run`.',
-              '`docker compose up` sur ta machine fait ce que dit le fichier compose, et un service peut monter n\'importe lequel de tes dossiers, `/` compris, dans un conteneur qui tourne en root. Docker tourne dans la VM : sers-t\'en là.',
-              'Hooks de commit : lefthook (`lefthook.yml`) et pre-commit (`.pre-commit-config.yaml`) gardent leurs commandes dans l\'arborescence de travail, donc `git commit` sur ta machine lance ce que l\'agent y a écrit. Relis-les dans le diff, ou commite avec `--no-verify`. Avec un Lima qui garde les `.git` en lecture seule, le dossier `.husky/` de husky l\'est aussi, puisque `core.hooksPath` pointe dedans (voir [Protéger .git](#git)), mais les commandes que ses hooks appellent (`npx lint-staged`, `npm test`) lancent des fichiers du projet.',
+              'mise fait confiance à une config selon son chemin, donc l\'agent peut modifier un `mise.toml` approuvé : ton shell lance ses hooks et définit son environnement au `cd` suivant, variables `AGENT_VM_UNSAFE_*` d\'agent-vm comprises. `mise settings set paranoid true` lie la confiance au contenu.',
+              '`npm run`, `make`, `./gradlew`, `pytest`, `node_modules/.bin`, un `.venv` activé : chacun lance des fichiers que l\'agent peut écrire. Lance-les dans la VM.',
+              '`docker compose up` sur ta machine peut monter n\'importe lequel de tes dossiers dans un conteneur root. Docker tourne dans la VM : sers-t\'en là.',
+              'lefthook et pre-commit gardent leurs commandes dans l\'arborescence, et les hooks de husky appellent des scripts du projet : relis-les dans le diff, ou commite avec `--no-verify`.',
             ],
             code: '',
           },
@@ -547,9 +544,9 @@ export const fr: Dictionary = {
             title: 'Gestionnaires de fichiers',
             paras: [],
             list: [
-              'macOS : les fichiers écrits à travers le partage ne portent pas l\'attribut de quarantaine, donc Gatekeeper ne vérifie pas un `.app`, `.command` ou `.pkg` que l\'agent y a laissé. Ne les ouvre pas depuis le Finder.',
-              'Windows : l\'Explorateur contacte le serveur nommé dans un `.library-ms`, `.searchConnector-ms`, `.url`, `.lnk` ou `desktop.ini` quand il affiche le dossier, et lui envoie ton empreinte NTLM ([CVE-2025-24054](https://research.checkpoint.com/2025/cve-2025-24054-ntlm-exploit-in-the-wild/), exploitée en 2025). Garde Windows à jour et le SMB sortant bloqué.',
-              'Linux : Dolphin, sous KDE, lançait des commandes depuis un `.desktop` ou un `.directory` d\'un dossier qu\'il ne faisait qu\'afficher (CVE-2019-14744, corrigée dans KDE Frameworks 5.61).',
+              'macOS : les fichiers écrits à travers le partage ne portent pas l\'attribut de quarantaine, donc Gatekeeper ne vérifie pas un `.app`, `.command` ou `.pkg` laissé là. Ne les ouvre pas depuis le Finder.',
+              'Windows : l\'Explorateur contacte le serveur nommé dans un `.library-ms`, `.url`, `.lnk` ou `desktop.ini` qu\'il affiche, et lui envoie ton empreinte NTLM ([CVE-2025-24054](https://research.checkpoint.com/2025/cve-2025-24054-ntlm-exploit-in-the-wild/)). Garde Windows à jour et le SMB sortant bloqué.',
+              'Linux : Dolphin, sous KDE, lançait des commandes depuis un `.desktop` d\'un dossier qu\'il ne faisait qu\'afficher (CVE-2019-14744, corrigée dans KDE Frameworks 5.61).',
             ],
             code: '',
           },
@@ -564,9 +561,9 @@ export const fr: Dictionary = {
               'Ce qu\'affiche la VM arrive tel quel dans ton terminal, et les terminaux réagissent aux séquences d\'échappement. agent-vm ne peut pas les filtrer sans casser les interfaces plein écran des agents.',
             ],
             list: [
-              'Presse-papiers : OSC 52 permet à un programme d\'écrire dans ton presse-papiers, et, dans certains terminaux, de le lire. N\'autorise l\'écriture que si tu en as besoin, jamais la lecture, et regarde ce que tu colles dans un shell de l\'hôte.',
-              'Réponses tapées à ta place : certaines séquences font taper une réponse au terminal. Pendant une session, elle part vers la VM, mais une séquence envoyée juste avant la sortie atterrit dans ton shell. Des réponses porteuses d\'une commande ont été de vrais bugs : iTerm2 [CVE-2024-38396](https://www.sentinelone.com/vulnerability-database/cve-2024-38396/) (corrigée en 3.5.2), xterm avant lui. Garde ton terminal à jour.',
-              'Fonctions qui agissent sur ta machine : transfert de fichiers et triggers d\'iTerm2, contrôle à distance de kitty (désactivé par défaut : laisse-le ainsi), liens dont le texte diffère de la cible.',
+              'Presse-papiers : OSC 52 permet à un programme d\'écrire dans ton presse-papiers, et, dans certains terminaux, de le lire. N\'autorise jamais la lecture, et regarde ce que tu colles dans un shell de l\'hôte.',
+              'Réponses tapées à ta place : une séquence envoyée juste avant la sortie peut faire taper le terminal dans ton shell. Certaines ont été de vrais bugs (iTerm2 [CVE-2024-38396](https://www.sentinelone.com/vulnerability-database/cve-2024-38396/)) : garde ton terminal à jour.',
+              'Fonctions qui agissent sur ta machine : transfert de fichiers et triggers d\'iTerm2, contrôle à distance de kitty (laisse-le désactivé), liens dont le texte diffère de la cible.',
               'Usurpation : la VM peut afficher un faux prompt de l\'hôte après une fausse sortie. Vérifie où tu es avant de taper un secret.',
             ],
             code: '',
@@ -574,7 +571,7 @@ export const fr: Dictionary = {
           {
             title: 'Réseau et ports',
             paras: [
-              'La VM atteint Internet et tous les services de la boucle locale de ta machine, à `192.168.5.2` : une base de données de dev, la VM d\'un autre projet par ses ports redirigés. Lima redirige chaque port qu\'écoute une VM vers ton `127.0.0.1`, s\'il est libre : une VM qui écoute la première sur 5432 reçoit les connexions, et les mots de passe, destinés à ton Postgres local. Le bloquer est [sur la feuille de route](#roadmap).',
+              'La VM atteint Internet et tous les services de la boucle locale de ta machine, à `192.168.5.2`. Lima redirige chaque port qu\'écoute une VM vers ton `127.0.0.1` s\'il est libre : une VM qui écoute la première sur 5432 reçoit les connexions, et les mots de passe, destinés à ton Postgres local. Le bloquer est [sur la feuille de route](#roadmap).',
             ],
             list: [],
             code: '',
@@ -628,7 +625,7 @@ export const fr: Dictionary = {
       'Chaque VM s\'authentifie de son côté : le `claude login` se fait dedans. Les identifiants survivent aux redémarrages de cette VM et ne sont partagés ni avec l\'hôte ni avec les autres VM. Le réseau, lui, est partagé : voir [Réseau et ports](#network-and-ports).',
     contentsTitle: 'Ce qu\'il y a dans la VM',
     contentsLede:
-      'La sélection par défaut de l\'assistant et `--preinstall=default` donnent le même résultat : tout ce qui suit, sauf les lignes marquées non.',
+      'L\'assistant de setup propose la sélection par défaut : tout ce qui suit, sauf les lignes marquées non. Réponds `n` pour choisir élément par élément. `--preinstall` prend les noms à la place, séparés par des virgules, plus `default`, `all` ou `none`, et saute l\'assistant, comme un setup sans terminal.',
     contentsHeaders: ['Catégorie', 'Paquets', 'Nom', 'Par défaut'],
     contents: [
       ['Base', 'git, curl, wget, jq, zsh, ca-certificates, sshfs, build-essential, pkgconf, patch, unzip, zip, ripgrep, fd-find, htop', 'toujours', 'oui'],
@@ -647,8 +644,10 @@ export const fr: Dictionary = {
       ['MCP', 'Chrome DevTools MCP, câblé dans chaque agent installé sauf Pi (pas de support MCP)', 'mcp-chrome', 'oui'],
       ['MCP', 'Playwright MCP, réutilisant le même Chromium', 'mcp-playwright', 'non'],
     ],
+    contentsCode:
+      'agent-vm setup --preinstall=default                  # sans question\nagent-vm setup --preinstall=default,rust             # avec Rust en plus\nagent-vm setup --preinstall=python,docker,claude     # Claude seul, minimal\nagent-vm setup --disk 50 --memory 16 --cpus 8        # une image plus grosse',
     contentsNote:
-      'Ce n\'est que ce que l\'image contient au départ, pour que le premier lancement ne passe pas son temps à télécharger des outils. L\'agent est root dans la VM et a accès au réseau : il installe lui-même ce qui lui manque, avec `apt install`, `pip`, `cargo` ou un runtime absent de la liste.',
+      '`codex` et `pi` entraînent `node`, tout comme `mcp-chrome` avec `chromium` et un agent. Les deux serveurs MCP sont ignorés sans `node` et `chromium`. Ce n\'est que ce que l\'image contient au départ : l\'agent est root dans la VM et a le réseau, il installe lui-même ce qui lui manque.',
     dockerTitle: 'Pourquoi pas Docker',
     dockerLede:
       'Sous Linux, les conteneurs partagent le noyau de l\'hôte : une dépendance compromise qui trouve une faille dans le noyau se retrouve sur ta machine. Sous macOS, Docker Desktop fait déjà tourner une VM, ce qui réduit l\'écart, mais c\'est une seule VM partagée par tous tes conteneurs, pas une par projet. Une VM a son propre noyau, et root dans la VM a encore l\'hyperviseur entre lui et ton poste. Les différences pratiques comptent autant que celle-ci.',
@@ -680,7 +679,7 @@ export const fr: Dictionary = {
       ],
     ],
     dockerNote:
-      'Docker tourne nativement dans la VM, sans Docker-in-Docker, Chromium headless fonctionne d\'emblée, et Lima redirige les ports tout seul. Sur un Mac, ça remplace Docker Desktop.',
+      'Docker tourne nativement dans la VM, sans Docker-in-Docker, et Chromium headless fonctionne d\'emblée. Sur un Mac, ça remplace Docker Desktop.',
   },
 
   roadmap: {
@@ -711,12 +710,17 @@ export const fr: Dictionary = {
       'agent-vm est une petite base de code Bash lisible, avec une suite de tests qui ne crée aucune VM et n\'a pas besoin du réseau. Rapports de bugs, corrections du moteur, prise en charge de nouveaux agents : tout est bienvenu.',
     testsTitle: 'Lancer les tests',
     testsBody:
-      'La suite tourne avec un `limactl` factice, dans un `HOME` jetable, où git lit aussi sa config. Aucune VM n\'est créée, démarrée ou supprimée, ton vrai `~/.agent-vm` et ta config git ne sont pas touchés, et rien n\'est téléchargé. Elle couvre le nommage des VM, la comparaison des ressources, la détection des VM obsolètes, les commandes `info`, `version` et `name`, l\'analyse de `--preinstall`, l\'écriture de la config MCP, et le mode de montage du projet sur lequel repose `--readonly`. `./test-e2e.sh` complète le tableau : il construit une vraie VM avec `--preinstall=none` et vérifie ce qu\'un `limactl` factice ne peut pas vérifier, à commencer par la capacité de root dans l\'invité à lever `--readonly` et, avec un Lima qui a `readonlyNames`, à écrire dans `.git`, et le fait qu\'une VM `--scratch` ne voie rien de l\'hôte et disparaisse ensuite. Il tourne dans son propre `LIMA_HOME` : tes VM ne sont jamais touchées. Les tests unitaires sont les `tests/NN-*.sh`, lancés dans l\'ordre dans un même shell après `tests/helpers.sh`, si bien qu\'un fichier peut s\'appuyer sur un précédent ; un nouveau sujet a son propre fichier.',
+      'Deux suites. Aucune ne touche à tes VM, à ton `~/.agent-vm` ni à ta config git.',
+    testsList: [
+      '`./test.sh` tourne avec un `limactl` factice dans un `HOME` jetable : aucune VM, aucun réseau. Il couvre le nommage, les ressources, les commandes `info` et `version`, l\'analyse de `--preinstall` et les modes de montage.',
+      '`./test-e2e.sh` construit une vraie VM avec `--preinstall=none` dans son propre `LIMA_HOME`, et vérifie ce qu\'un `limactl` factice ne peut pas : que root dans l\'invité ne peut ni lever `--readonly` ni écrire dans `.git`, et qu\'une VM `--scratch` ne voit rien de l\'hôte.',
+      'Les tests unitaires sont les `tests/NN-*.sh`, lancés dans l\'ordre dans un même shell après `tests/helpers.sh`. Un nouveau sujet a son propre fichier.',
+    ],
     testsCode: './test.sh        # rapide, sans VM\n./test-e2e.sh    # vraie VM, nécessite Lima',
     shellsTitle: 'Tester avec les shells qui comptent',
     shellsBody:
       'macOS fournit encore bash 3.2, plus strict qu\'un bash récent sur l\'expansion d\'un tableau vide sous `set -u`. Un changement qui passe sous bash 5 peut très bien casser sur un Mac tel qu\'il sort du carton. L\'image `bash:3.2` n\'a pas git, donc les tests qui en ont besoin y sont sautés : ajoute-le avec `apk`.',
-    shellsCode: 'docker run --rm -v "$PWD:/w" -w /w bash:3.2 ./test.sh\ndocker run --rm -v "$PWD:/w" -w /w bash:3.2 sh -c \'apk add -q git && git config --global safe.directory "*" && ./test.sh\'',
+    shellsCode: 'docker run --rm -v "$PWD:/w" -w /w bash:3.2 ./test.sh\n\n# avec git, pour les tests qui en ont besoin\ndocker run --rm -v "$PWD:/w" -w /w bash:3.2 sh -c \'\n  set -e\n  apk add -q git\n  git config --global safe.directory "*"\n  ./test.sh\'',
     structureTitle: 'Où se trouve quoi',
     structureHeaders: ['Fichier', 'Ce que c\'est'],
     structure: [
@@ -771,7 +775,7 @@ export const fr: Dictionary = {
           { name: 'OpenCode', note: 'Agent terminal open source.', href: 'https://github.com/anomalyco/opencode' },
           { name: 'Codex CLI', note: 'OpenAI.', href: 'https://github.com/openai/codex' },
           { name: 'Mistral Vibe', note: 'Mistral AI.', href: 'https://docs.mistral.ai/vibe/code/cli/install-setup' },
-          { name: 'Pi', note: 'Harnais open source minimaliste. En option.', href: 'https://pi.dev' },
+          { name: 'Pi', note: 'Harnais open source minimaliste.', href: 'https://pi.dev' },
         ],
       },
       {
@@ -784,7 +788,7 @@ export const fr: Dictionary = {
           },
           {
             name: 'Playwright MCP',
-            note: 'En option, pointé sur le même Chromium.',
+            note: 'Pointé sur le même Chromium.',
             href: 'https://github.com/microsoft/playwright-mcp',
           },
         ],

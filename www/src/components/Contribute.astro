@@ -29,11 +29,20 @@ const d = t(locale);
       <div class="contribute__col">
         <Heading as="h3" id={slug(en.contribute.testsTitle)} locale={locale} class="contribute__sub">{d.contribute.testsTitle}</Heading>
         <p class="prose contribute__body" set:html={inline(d.contribute.testsBody)} />
+        <ul class="contribute__rules contribute__tests">
+          {
+            d.contribute.testsList.map((item) => (
+              <li class="contribute__rule">
+                <span class="prose" set:html={inline(item)} />
+              </li>
+            ))
+          }
+        </ul>
         <CodeBlock locale={locale} code={d.contribute.testsCode} prompt />
 
         <Heading as="h3" id={slug(en.contribute.shellsTitle)} locale={locale} class="contribute__sub contribute__sub--spaced">{d.contribute.shellsTitle}</Heading>
         <p class="prose contribute__body" set:html={inline(d.contribute.shellsBody)} />
-        <CodeBlock locale={locale} code={d.contribute.shellsCode} prompt />
+        <CodeBlock locale={locale} code={d.contribute.shellsCode} />
       </div>
 
       <div class="contribute__col">
@@ -129,6 +138,10 @@ const d = t(locale);
     display: grid;
     gap: 0.75rem;
     list-style: none;
+  }
+
+  .contribute__tests {
+    margin-bottom: 1rem;
   }
 
   .contribute__rule {

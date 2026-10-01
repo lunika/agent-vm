@@ -7,6 +7,7 @@ import sitemap from '@astrojs/sitemap';
 export default defineConfig({
   site: 'https://www.agent-vm.org',
   trailingSlash: 'always',
+  server: { port: 4822 },
   i18n: {
     locales: ['en', 'fr'],
     defaultLocale: 'en',
