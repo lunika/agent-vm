@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # agent-vm.setup.sh: Package installation script that runs inside the base VM
-# Part of https://github.com/sylvinus/agent-vm
+# Part of https://www.agent-vm.org/
 #
 # This script is executed inside the VM during "agent-vm setup".
 #
@@ -10,9 +10,27 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# apt under sudo, with the noninteractive frontend actually reaching it.
+#
+# The export above does not survive sudo: `Defaults env_reset` drops every
+# variable that is not in env_keep, so each `sudo apt-get install` started
+# debconf's Dialog frontend, failed to load it, fell back to Readline, failed
+# again, and printed that warning block, once per install step.
+#
+# `sudo env VAR=value` rather than `sudo -E` or `sudo VAR=value cmd`: both of
+# those need the sudoers policy to allow setting the environment, while
+# passing the variable to `env` is just a command with arguments.
+#
+# </dev/null: this script reaches bash on its stdin, so a command reading
+# stdin (dpkg asking about a changed config file, an npm install script)
+# would swallow the lines after it, which then never run.
+apt_get() {
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get "$@" </dev/null
+}
+
 # Component toggles. The host wizard prepends `export` lines for these before
 # piping the script in. Members of the default install set (everything except
-# Ruby/Rust/Go) default to 1 so running this script standalone (without the
+# Ruby/Rust/Go/Pi/Playwright MCP) default to 1 so running this script standalone (without the
 # wizard) produces the same install you'd get from `agent-vm setup --preinstall=default`.
 INSTALL_PYTHON="${AGENT_VM_INSTALL_PYTHON:-1}"
 INSTALL_NODE="${AGENT_VM_INSTALL_NODE:-1}"
@@ -26,21 +44,26 @@ INSTALL_CLAUDE="${AGENT_VM_INSTALL_CLAUDE:-1}"
 INSTALL_OPENCODE="${AGENT_VM_INSTALL_OPENCODE:-1}"
 INSTALL_CODEX="${AGENT_VM_INSTALL_CODEX:-1}"
 INSTALL_VIBE="${AGENT_VM_INSTALL_VIBE:-1}"
-# MCP servers wired into every installed agent's config. Only servers with a
-# dependency worth baking into the image get a toggle; remote MCP servers are
-# a URL (and often a secret) and belong in per-project config, not in an image
-# every VM is cloned from. mcp-playwright is opt-in: a second browser-driving
-# MCP alongside mcp-chrome is redundant for most users, and every wired server
-# costs tool definitions in the agent's context.
+INSTALL_PI="${AGENT_VM_INSTALL_PI:-0}"
+# MCP servers wired into every installed agent's config (see lib/setup.sh).
 INSTALL_MCP_CHROME="${AGENT_VM_INSTALL_MCP_CHROME:-1}"
 INSTALL_MCP_PLAYWRIGHT="${AGENT_VM_INSTALL_MCP_PLAYWRIGHT:-0}"
 
-# Several installers (Claude Code, Vibe, …) check PATH at install time and
-# print a "~/.local/bin is not in your PATH" warning otherwise. The persistent
-# PATH lives in ~/.zshrc / ~/.zshenv (added below), so once the user opens a
-# VM shell it's fine — but this bash script runs under a fresh session that
-# doesn't see those edits yet. Export it here so installers stay quiet.
+# For this session too: installers (Claude Code, Vibe) warn when ~/.local/bin
+# is not on PATH, which ~/.zshenv only sets for the next ones.
 export PATH="$HOME/.local/bin:$PATH"
+
+# Behind a proxy: Lima copies the host's proxy settings into /etc/environment,
+# which ssh sessions (this script, `agent-vm shell`) load. sudo drops them
+# (env_reset), and Debian's sudo does not read that file, so every `sudo
+# apt-get` below went out without the proxy and failed (#25). Keeping them
+# through sudo covers this script and every VM cloned from this base. Checked
+# with visudo before it is installed: a broken sudoers file breaks sudo.
+printf 'Defaults env_keep += "http_proxy https_proxy ftp_proxy no_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY NO_PROXY"\n' \
+  > /tmp/agent-vm-proxy.sudoers
+sudo visudo -cqf /tmp/agent-vm-proxy.sudoers
+sudo install -m 0440 -o root -g root /tmp/agent-vm-proxy.sudoers /etc/sudoers.d/10-agent-vm-proxy
+rm -f /tmp/agent-vm-proxy.sudoers
 
 # Disable needrestart's interactive prompts
 sudo mkdir -p /etc/needrestart/conf.d
@@ -49,38 +72,60 @@ echo '$nrconf{restart} = '"'"'a'"'"';' | sudo tee /etc/needrestart/conf.d/no-pro
 # Base packages always installed: core CLI tools plus the dev libraries needed
 # to compile Ruby/Python/Node versions via mise (kept here so that toggling a
 # language off doesn't strip the libs the user may still want to build with).
+# sshfs: the project VMs use Lima's reverse-sshfs when it can keep .git
+# read-only. Lima would install it on each clone's first boot otherwise.
+#
+# Every install passes --no-install-recommends. Recommends pulled in hundreds
+# of MB nobody uses here (Chromium alone brought printer config, Samba,
+# avahi-daemon, upower, Vulkan drivers), some of them running daemons. The
+# recommended packages that are used are listed by name instead.
 echo "Installing base packages..."
-sudo apt-get update
-sudo apt-get install -y \
+apt_get update
+apt_get install -y --no-install-recommends \
   git curl jq zsh \
-  wget build-essential \
+  wget build-essential pkgconf patch \
   ripgrep fd-find htop \
   unzip zip \
-  ca-certificates \
-  iptables \
+  ca-certificates sshfs \
   libssl-dev libreadline-dev zlib1g-dev libyaml-dev libffi-dev
+
+# sshfs 3.7.6 (and Debian's 3.7.3-1.2~deb13u1) refuses symlinks whose target
+# is absolute or contains "..", with EPERM: contain_symlinks, on by default
+# (CVE-2026-47187). That breaks every node_modules/.bin link in a share. It
+# protects a client from a rogue SFTP server; here the server is the user's
+# own host, and a link followed in the VM only reaches the VM's files. Lima
+# runs `sshfs` from PATH and takes no extra option, so the wrapper adds it.
+sudo tee /usr/local/bin/sshfs > /dev/null <<'EOF'
+#!/bin/sh
+# Installed by agent-vm: see agent-vm.setup.sh.
+if /usr/bin/sshfs -h 2>&1 | grep -q no_contain_symlinks; then
+  exec /usr/bin/sshfs "$@" -o no_contain_symlinks
+fi
+exec /usr/bin/sshfs "$@"
+EOF
+sudo chmod 755 /usr/local/bin/sshfs
 
 if [[ "$INSTALL_PYTHON" == "1" ]]; then
   echo "Installing Python 3..."
-  sudo apt-get install -y python3 python3-pip python3-venv
+  # python3-dev: headers for pip builds of C extensions.
+  apt_get install -y --no-install-recommends python3 python3-pip python3-venv python3-dev
 fi
 
 if [[ "$INSTALL_RUBY" == "1" ]]; then
   echo "Installing Ruby..."
-  sudo apt-get install -y ruby-full
+  apt_get install -y --no-install-recommends ruby-full
 fi
 
 if [[ "$INSTALL_GOLANG" == "1" ]]; then
   echo "Installing Go..."
-  sudo apt-get install -y golang-go
+  apt_get install -y --no-install-recommends golang-go
 fi
 
 if [[ "$INSTALL_RUST" == "1" ]]; then
   # Rustup is the canonical Rust installer. --no-modify-path keeps it from
-  # editing ~/.profile/~/.bashrc — we add ~/.cargo/bin to zsh's PATH below.
+  # editing ~/.profile/~/.bashrc: ~/.cargo/bin goes on zsh's PATH below.
   echo "Installing Rust..."
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable
-  echo 'export PATH=$HOME/.cargo/bin:$PATH' >> ~/.zshrc
   echo 'export PATH=$HOME/.cargo/bin:$PATH' >> ~/.zshenv
 fi
 
@@ -89,8 +134,20 @@ sudo chsh -s /usr/bin/zsh "$(whoami)"
 
 # Always set the VM prompt and put ~/.local/bin on PATH (mise installs there;
 # Vibe's installer puts `vibe`/`vibe-acp` there too).
+#
+# PATH additions go in ~/.zshenv only: every zsh reads it, and nothing in
+# Debian 13's /etc/zsh/{zprofile,zshrc} resets PATH afterwards.
 echo 'export PS1="vm:%1~%% "' >> ~/.zshrc
-echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.zshrc
+
+# Shell history, kept across sessions and restarts: zsh saves none unless told
+# where (#20). It lives on the VM's disk, where the agent can read it, like
+# everything else there. A command started with a space is left out of it.
+cat >> ~/.zshrc <<'ZSHRC'
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+setopt INC_APPEND_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE
+ZSHRC
 echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.zshenv
 
 # Auto-source ~/.agent-vm.env if present. The host pushes ~/.agent-vm/env into
@@ -103,8 +160,7 @@ echo '[ -f "$HOME/.agent-vm.env" ] && { set -a; . "$HOME/.agent-vm.env"; set +a;
 # Always installed so users can `mise install ruby@latest`, etc., even when
 # they've opted out of preinstalled Node.
 echo "Installing mise..."
-curl https://mise.run | sh
-echo 'eval "$(~/.local/bin/mise activate zsh)"' >> ~/.zshrc
+curl -fsSL https://mise.run | sh
 echo 'eval "$(~/.local/bin/mise activate zsh)"' >> ~/.zshenv
 
 if [[ "$INSTALL_DOCKER" == "1" ]]; then
@@ -114,22 +170,38 @@ if [[ "$INSTALL_DOCKER" == "1" ]]; then
   sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
   sudo chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-  sudo apt-get update
-  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  apt_get update
+  # buildx and pigz are Recommends: `docker build` needs buildx, pigz speeds
+  # up layer decompression. docker-ce-rootless-extras is left out: the user is
+  # in the docker group of the rootful daemon.
+  apt_get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io \
+    docker-compose-plugin docker-buildx-plugin pigz
   sudo usermod -aG docker "$(whoami)"
 fi
 
 if [[ "$INSTALL_NODE" == "1" ]]; then
   # Install Node.js 24 LTS (needed for MCP servers and Codex CLI)
+  # The NodeSource repo is set up by hand, as their setup_24.x script does,
+  # rather than piping that script to a root shell: it also installs gnupg
+  # just to dearmor the key, while apt reads an armored .asc key as is. The pin
+  # keeps apt on NodeSource's nodejs over Debian's older one.
   echo "Installing Node.js 24..."
-  curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
-  sudo apt-get install -y nodejs
+  sudo install -m 0755 -d /etc/apt/keyrings
+  sudo curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc
+  sudo chmod a+r /etc/apt/keyrings/nodesource.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_24.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+  printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' | sudo tee /etc/apt/preferences.d/nodejs > /dev/null
+  apt_get update
+  apt_get install -y --no-install-recommends nodejs
 fi
 
 if [[ "$INSTALL_CHROMIUM" == "1" ]]; then
   # Install Chromium and dependencies for headless browsing
   echo "Installing Chromium..."
-  sudo apt-get install -y chromium fonts-liberation xvfb
+  # xauth: xvfb-run needs it, and it is only a Recommends of xvfb.
+  # fonts-dejavu-core: with Liberation alone, fontconfig resolves the generic
+  # sans-serif and serif to Liberation Mono.
+  apt_get install -y --no-install-recommends chromium fonts-liberation fonts-dejavu-core xvfb xauth
   sudo ln -sf /usr/bin/chromium /usr/bin/google-chrome
   sudo ln -sf /usr/bin/chromium /usr/bin/google-chrome-stable
   sudo mkdir -p /opt/google/chrome
@@ -143,14 +215,13 @@ if [[ "$INSTALL_GH" == "1" ]]; then
   wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
   sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-  sudo apt-get update
-  sudo apt-get install -y gh
+  apt_get update
+  apt_get install -y --no-install-recommends gh
 fi
 
 if [[ "$INSTALL_CLAUDE" == "1" ]]; then
   echo "Installing Claude Code..."
   curl -fsSL https://claude.ai/install.sh | bash
-  echo 'export PATH=$HOME/.claude/local/bin:$PATH' >> ~/.zshrc
   echo 'export PATH=$HOME/.claude/local/bin:$PATH' >> ~/.zshenv
 
   # Enforce full autonomy via *managed* settings (highest precedence), not the
@@ -177,7 +248,6 @@ fi
 if [[ "$INSTALL_OPENCODE" == "1" ]]; then
   echo "Installing OpenCode..."
   curl -fsSL https://opencode.ai/install | bash
-  echo 'export PATH=$HOME/.opencode/bin:$PATH' >> ~/.zshrc
   echo 'export PATH=$HOME/.opencode/bin:$PATH' >> ~/.zshenv
 fi
 
@@ -186,7 +256,7 @@ if [[ "$INSTALL_CODEX" == "1" ]]; then
     echo "Skipping Codex CLI: requires Node.js (re-run setup with Node.js enabled)." >&2
   else
     echo "Installing Codex CLI..."
-    sudo npm i -g @openai/codex
+    sudo npm i -g @openai/codex </dev/null
   fi
 fi
 
@@ -196,6 +266,28 @@ if [[ "$INSTALL_VIBE" == "1" ]]; then
   # doesn't abort on its own PATH check.
   echo "Installing Mistral Vibe..."
   curl -LsSf https://mistral.ai/vibe/install.sh | bash
+fi
+
+if [[ "$INSTALL_PI" == "1" ]]; then
+  if [[ "$INSTALL_NODE" != "1" ]]; then
+    echo "Skipping Pi: requires Node.js (re-run setup with Node.js enabled)." >&2
+  else
+    # @earendil-works is the maintained scope; @mariozechner/pi-coding-agent is
+    # deprecated and misses security fixes. --ignore-scripts as Pi's docs say.
+    echo "Installing Pi..."
+    sudo npm i -g --ignore-scripts @earendil-works/pi-coding-agent </dev/null
+    # Pi never asks before running tools. Its one gate is trust for a project's
+    # .pi/ extensions and skills, which the VM makes moot and which `pi -p`
+    # silently skips. Telemetry covers the install ping and the attribution
+    # headers Pi adds to some providers' requests.
+    mkdir -p "$HOME/.pi/agent"
+    cat > "$HOME/.pi/agent/settings.json" << 'JSON'
+{
+  "defaultProjectTrust": "always",
+  "enableInstallTelemetry": false
+}
+JSON
+  fi
 fi
 
 # Wire one stdio MCP server into every installed agent's config. Each agent
@@ -285,7 +377,7 @@ configure_mcp() {
   fi
 }
 
-# True when at least one agent is installed — nothing to configure otherwise,
+# True when at least one agent is installed: nothing to configure otherwise,
 # and no reason to print a "skipping" notice either.
 any_agent_installed() {
   [[ "$INSTALL_CLAUDE" == "1" || "$INSTALL_OPENCODE" == "1" \
@@ -302,26 +394,11 @@ if [[ "$INSTALL_MCP_CHROME" == "1" ]] && any_agent_installed; then
   fi
 fi
 
-# Playwright MCP drives the Chromium installed above instead of pulling its own
-# browser build, so it needs the same two dependencies as the Chrome MCP.
-#
-# Two things are needed for that reuse, and --executable-path alone is not
-# enough: @playwright/mcp depends on the `playwright` package, whose postinstall
-# downloads every browser marked installByDefault in playwright-core's
-# browsers.json — chromium, chromium-headless-shell, firefox, webkit and ffmpeg,
-# several hundred MB — regardless of which binary ends up being launched.
-# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD suppresses that. It is set through `env` on
-# this one command rather than in the VM's ~/.zshenv, so a user's own
-# `npx playwright test` in a project still downloads the browsers it expects.
-#
-# Consequence to know: this server is pinned to Chromium. Pointing it at another
-# engine means editing the MCP entry (drop --executable-path, add e.g.
-# --browser firefox), and the first launch then fails with Playwright's usual
-# "run npx playwright install" message — which works inside the VM and lands the
-# download in that project VM rather than in the base image.
-#
-# The trade-off: Playwright pins and tests against its own browser build, so a
-# distro Chromium can drift from what playwright-core expects. Re-add
+# Playwright MCP drives the Chromium installed above (--executable-path), not
+# a browser of its own: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, on this command only,
+# skips the several hundred MB of browsers the `playwright` package downloads
+# on install, while a project's own `npx playwright test` still gets them. A
+# distro Chromium can drift from what playwright-core expects:
 # `npx playwright install chromium` here if that ever bites.
 if [[ "$INSTALL_MCP_PLAYWRIGHT" == "1" ]] && any_agent_installed; then
   if [[ "$INSTALL_NODE" == "1" && "$INSTALL_CHROMIUM" == "1" ]]; then
