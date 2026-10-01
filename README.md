@@ -4,7 +4,7 @@ Run AI coding agents in a disposable Linux VM per project, with permissions bypa
 
 Built on [Lima](https://lima-vm.io/). Ships dev tools, Docker, headless Chromium with [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp), and [Claude Code](https://claude.ai/code), [OpenCode](https://github.com/anomalyco/opencode), [Codex CLI](https://github.com/openai/codex), [Mistral Vibe](https://docs.mistral.ai/vibe/code/cli/install-setup) and, opt-in, [Pi](https://pi.dev). macOS, Linux, and Windows (Git Bash, experimental).
 
-**Documentation: [www.agent-vm.org](https://www.agent-vm.org/)**
+**Documentation: [www.agent-vm.org](https://www.agent-vm.org/)** · Chat: [#agent-vm:matrix.org](https://matrix.to/#/#agent-vm:matrix.org)
 
 ## Install
 

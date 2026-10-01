@@ -744,6 +744,8 @@ export const en = {
     prHref: 'https://github.com/sylvinus/agent-vm/pulls',
     repoLabel: 'Read the source',
     repoHref: 'https://github.com/sylvinus/agent-vm',
+    chatLabel: 'Chat on Matrix',
+    chatHref: 'https://matrix.to/#/#agent-vm:matrix.org',
   },
 
   credits: {

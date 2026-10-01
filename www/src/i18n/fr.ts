@@ -746,6 +746,8 @@ export const fr: Dictionary = {
     prHref: 'https://github.com/sylvinus/agent-vm/pulls',
     repoLabel: 'Lire le code',
     repoHref: 'https://github.com/sylvinus/agent-vm',
+    chatLabel: 'Discuter sur Matrix',
+    chatHref: 'https://matrix.to/#/#agent-vm:matrix.org',
   },
 
   credits: {

@@ -55,6 +55,14 @@ npm run og
 That needs `sharp` (a devDependency) and a font on the machine. The deploy does
 not: it only reads the committed PNG.
 
+`public/favicon.png`, the fallback for browsers without SVG favicons, and
+`public/apple-touch-icon.png` are committed too. Regenerate them after changing
+`public/favicon.svg`:
+
+```bash
+npm run favicon
+```
+
 ## Deploying
 
 `.github/workflows/www.yml` builds on every push to `main` that touches `www/`

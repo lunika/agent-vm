@@ -11,7 +11,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "og": "node scripts/build-og.mjs"
+    "og": "node scripts/build-og.mjs",
+    "favicon": "node scripts/build-favicon.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.4",

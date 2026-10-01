@@ -84,6 +84,10 @@ const d = t(locale);
         <span class="contribute__link-label">{d.contribute.repoLabel}</span>
         <span class="contribute__link-arrow" aria-hidden="true">→</span>
       </a>
+      <a class="contribute__link" href={d.contribute.chatHref} rel="noopener" target="_blank">
+        <span class="contribute__link-label">{d.contribute.chatLabel}</span>
+        <span class="contribute__link-arrow" aria-hidden="true">→</span>
+      </a>
     </div>
   </div>
 </section>
@@ -147,7 +151,7 @@ const d = t(locale);
 
   .contribute__links {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 1px;
     margin-top: clamp(2.5rem, 5vw, 4rem);
     background: var(--line);
@@ -190,6 +194,16 @@ const d = t(locale);
     .contribute__grid {
       grid-template-columns: minmax(0, 1fr);
       gap: 2.5rem;
+    }
+
+    .contribute__links {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 36rem) {
+    .contribute__links {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>
