@@ -30,8 +30,9 @@ apt_get() {
 
 # Component toggles. The host wizard prepends `export` lines for these before
 # piping the script in. Members of the default install set (everything except
-# Ruby/Rust/Go/Pi/Playwright MCP) default to 1 so running this script standalone (without the
-# wizard) produces the same install you'd get from `agent-vm setup --preinstall=default`.
+# Ruby/Rust/Go/Pi/Playwright MCP/code-server and its extensions) default to 1 so running this
+# script standalone (without the wizard) produces the same install you'd get from
+# `agent-vm setup --preinstall=default`.
 INSTALL_PYTHON="${AGENT_VM_INSTALL_PYTHON:-1}"
 INSTALL_NODE="${AGENT_VM_INSTALL_NODE:-1}"
 INSTALL_RUBY="${AGENT_VM_INSTALL_RUBY:-0}"
@@ -45,9 +46,24 @@ INSTALL_OPENCODE="${AGENT_VM_INSTALL_OPENCODE:-1}"
 INSTALL_CODEX="${AGENT_VM_INSTALL_CODEX:-1}"
 INSTALL_VIBE="${AGENT_VM_INSTALL_VIBE:-1}"
 INSTALL_PI="${AGENT_VM_INSTALL_PI:-0}"
+INSTALL_CODE_SERVER="${AGENT_VM_INSTALL_CODE_SERVER:-0}"
+# Each agent's code-server extension, which brings its own copy of the agent.
+INSTALL_CODE_CLAUDE="${AGENT_VM_INSTALL_CODE_CLAUDE:-0}"
+INSTALL_CODE_CODEX="${AGENT_VM_INSTALL_CODE_CODEX:-0}"
+INSTALL_CODE_VIBE="${AGENT_VM_INSTALL_CODE_VIBE:-0}"
+if [[ "$INSTALL_CODE_CLAUDE$INSTALL_CODE_CODEX$INSTALL_CODE_VIBE" == *1* ]]; then
+  INSTALL_CODE_SERVER=1
+fi
 # MCP servers wired into every installed agent's config (see lib/setup.sh).
 INSTALL_MCP_CHROME="${AGENT_VM_INSTALL_MCP_CHROME:-1}"
 INSTALL_MCP_PLAYWRIGHT="${AGENT_VM_INSTALL_MCP_PLAYWRIGHT:-0}"
+
+# An agent there in either form: its command line and its extension read the
+# same config, which is written for both.
+HAS_CLAUDE=0 HAS_CODEX=0 HAS_VIBE=0
+[[ "$INSTALL_CLAUDE$INSTALL_CODE_CLAUDE" == *1* ]] && HAS_CLAUDE=1
+[[ "$INSTALL_CODEX$INSTALL_CODE_CODEX" == *1* ]] && HAS_CODEX=1
+[[ "$INSTALL_VIBE$INSTALL_CODE_VIBE" == *1* ]] && HAS_VIBE=1
 
 # For this session too: installers (Claude Code, Vibe) warn when ~/.local/bin
 # is not on PATH, which ~/.zshenv only sets for the next ones.
@@ -223,7 +239,9 @@ if [[ "$INSTALL_CLAUDE" == "1" ]]; then
   echo "Installing Claude Code..."
   curl -fsSL https://claude.ai/install.sh | bash
   echo 'export PATH=$HOME/.claude/local/bin:$PATH' >> ~/.zshenv
+fi
 
+if [[ "$HAS_CLAUDE" == "1" ]]; then
   # Enforce full autonomy via *managed* settings (highest precedence), not the
   # user's ~/.claude/. A user can bind-mount or overwrite their own ~/.claude/
   # dir freely; this system-level policy is untouched and always wins.
@@ -235,6 +253,7 @@ if [[ "$INSTALL_CLAUDE" == "1" ]]; then
   # "ask" permission mode. Settings are re-read on every (re)launch, so encoding
   # the policy here makes it survive those relaunches. `tui: fullscreen` also
   # pins fullscreen from the first launch, so the opt-in relaunch never fires.
+  # The extension's own copy of Claude Code reads it too.
   echo "Configuring Claude managed settings (bypass permissions + fullscreen)..."
   sudo mkdir -p /etc/claude-code
   cat << 'JSON' | sudo tee /etc/claude-code/managed-settings.json > /dev/null
@@ -290,6 +309,57 @@ JSON
   fi
 fi
 
+# A top-level TOML key as the first line of <file>, where the tables the MCP
+# config appends later cannot capture it. Skipped when the key is there.
+toml_prepend() {
+  local file="$1" key="$2" value="$3"
+  mkdir -p "$(dirname "$file")"
+  if [[ -f "$file" ]] && grep -q "^$key *=" "$file"; then
+    return 0
+  fi
+  { printf '%s = %s\n' "$key" "$value"; [[ ! -f "$file" ]] || cat "$file"; } > "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
+  # The editor of `agent-vm code` (lib/code.sh). No password here: every VM
+  # is a copy of this disk, so each one makes its own on first use.
+  echo "Installing code-server..."
+  curl -fsSL https://code-server.dev/install.sh | sh
+  extensions=()
+  [[ "$INSTALL_CODE_CLAUDE" == "1" ]] && extensions+=(--install-extension anthropic.claude-code)
+  [[ "$INSTALL_CODE_CODEX" == "1" ]] && extensions+=(--install-extension openai.chatgpt)
+  [[ "$INSTALL_CODE_VIBE" == "1" ]] && extensions+=(--install-extension mistralai.mistral-vibe-code)
+  if [[ ${#extensions[@]} -gt 0 ]]; then
+    echo "Installing the agents' extensions..."
+    code-server "${extensions[@]}" </dev/null
+  fi
+  # chat.disableAIFeatures turns off the GitHub Copilot chat and completions
+  # that code-server ships. The Claude keys start its conversations in bypass
+  # mode, as the managed settings above do for the CLI.
+  mkdir -p "$HOME/.local/share/code-server/User"
+  jq -n --arg claude "$INSTALL_CODE_CLAUDE" '
+    {
+      "workbench.colorTheme": "Dark 2026",
+      "chat.disableAIFeatures": true
+    } + if $claude == "1" then {
+      "claudeCode.allowDangerouslySkipPermissions": true,
+      "claudeCode.initialPermissionMode": "bypassPermissions"
+    } else {} end' > "$HOME/.local/share/code-server/User/settings.json"
+  # Codex and Vibe have no setting for it: their extensions start in the mode
+  # the agent's own config names. These match the flags the command line gets
+  # (_agent_vm_agent in agent-vm.sh).
+  if [[ "$INSTALL_CODE_CODEX" == "1" ]]; then
+    toml_prepend "$HOME/.codex/config.toml" sandbox_mode '"danger-full-access"'
+    toml_prepend "$HOME/.codex/config.toml" approval_policy '"never"'
+  fi
+  if [[ "$INSTALL_CODE_VIBE" == "1" ]]; then
+    toml_prepend "$HOME/.vibe/config.toml" default_agent '"auto-approve"'
+  fi
+  # Written by code-server on its first run, with a password of its own.
+  rm -rf "$HOME/.config/code-server"
+fi
+
 # Wire one stdio MCP server into every installed agent's config. Each agent
 # stores MCP servers in its own format, so that mapping is written once here
 # instead of being copy-pasted per server.
@@ -313,7 +383,7 @@ configure_mcp() {
   local args_json
   args_json="$(printf '%s\n' "$@" | jq -R . | jq -sc .)"
 
-  if [[ "$INSTALL_CLAUDE" == "1" ]]; then
+  if [[ "$HAS_CLAUDE" == "1" ]]; then
     echo "Configuring $name MCP server for Claude..."
     local config="$HOME/.claude.json"
     [ -f "$config" ] || echo '{}' > "$config"
@@ -344,7 +414,7 @@ configure_mcp() {
     fi
   fi
 
-  if [[ "$INSTALL_VIBE" == "1" ]]; then
+  if [[ "$HAS_VIBE" == "1" ]]; then
     # Vibe uses TOML; append an array-of-tables entry (valid even if the wizard
     # later writes to the same file). Guard against duplicates on repeated runs.
     echo "Configuring $name MCP server for Vibe..."
@@ -361,7 +431,7 @@ configure_mcp() {
     fi
   fi
 
-  if [[ "$INSTALL_CODEX" == "1" ]]; then
+  if [[ "$HAS_CODEX" == "1" ]]; then
     # Codex CLI uses TOML at ~/.codex/config.toml with [mcp_servers.NAME]
     # tables. Guard against duplicates on repeated setup runs.
     echo "Configuring $name MCP server for Codex..."
@@ -380,8 +450,8 @@ configure_mcp() {
 # True when at least one agent is installed: nothing to configure otherwise,
 # and no reason to print a "skipping" notice either.
 any_agent_installed() {
-  [[ "$INSTALL_CLAUDE" == "1" || "$INSTALL_OPENCODE" == "1" \
-     || "$INSTALL_CODEX" == "1" || "$INSTALL_VIBE" == "1" ]]
+  [[ "$HAS_CLAUDE" == "1" || "$INSTALL_OPENCODE" == "1" \
+     || "$HAS_CODEX" == "1" || "$HAS_VIBE" == "1" ]]
 }
 
 # Chrome DevTools MCP runs via `npx` and drives the Chromium installed above,

@@ -5,10 +5,11 @@ section "release hygiene"
 # is a command nobody uses. (`sh`/`destroy`/`status` are aliases documented inline.)
 help_text="$(agent-vm help)"
 missing=""
-for verb in setup claude opencode codex vibe pi shell run stop rm destroy-all \
+for verb in setup claude opencode codex vibe pi shell run code stop rm destroy-all \
             list name info env version help; do
+  # The word, then a space or a comma: `codex` is not `code`.
   case "$help_text" in
-    *"  $verb"*) ;;
+    *"  $verb "*|*"  $verb,"*) ;;
     *) missing="$missing $verb" ;;
   esac
 done
@@ -163,7 +164,7 @@ else
   (
     HOME="$MCPHOME"
     eval "$(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
-    INSTALL_CLAUDE=1 INSTALL_OPENCODE=1 INSTALL_VIBE=1 INSTALL_CODEX=1
+    HAS_CLAUDE=1 INSTALL_OPENCODE=1 HAS_VIBE=1 HAS_CODEX=1
     for _ in 1 2; do   # twice: the writer must be idempotent
       configure_mcp chrome-devtools npx -y chrome-devtools-mcp@latest --headless=true
       configure_mcp playwright env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npx -y @playwright/mcp@latest
@@ -210,4 +211,78 @@ else
   PIH0="$SB/pi-home-nonode"; mkdir -p "$PIH0"
   run_pi_block "$PIH0" 0
   check "pi: skipped without node" "$( [ -e "$PIH0/sudo.log" ] || [ -e "$PIH0/.pi" ]; echo $?)" "1"
+fi
+
+# =============================================================================
+section "code-server install block"
+# =============================================================================
+# Lifted out like the Pi block, with curl and code-server recorded instead of
+# run, then the MCP writer after it, as in the script.
+if ! command -v jq >/dev/null 2>&1; then
+  printf '  skip code-server install tests (jq not installed)\n'
+else
+  cs_block="$(awk '/^toml_prepend\(\) \{/,/^\}/' "$SETUP_SH")
+$(awk '/^if \[\[ "\$INSTALL_CODE_SERVER" == "1" \]\]; then/,/^fi$/' "$SETUP_SH")
+$(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
+  # <home> <claude> <codex> <vibe>: the extensions asked for.
+  # Under set -e, as the script runs: a failing step must show here. Twice:
+  # setup can be run again on a base. The first run's state is kept in
+  # <home>/first.
+  run_cs_block() {
+    mkdir -p "$1/.config/code-server"; echo "password: from-the-base" > "$1/.config/code-server/config.yaml"
+    ( set -e
+      HOME="$1"; INSTALL_CODE_SERVER=1 INSTALL_CODE_CLAUDE="$2" INSTALL_CODE_CODEX="$3" INSTALL_CODE_VIBE="$4"
+      HAS_CLAUDE="$2" HAS_CODEX="$3" HAS_VIBE="$4" INSTALL_OPENCODE=0
+      curl() { echo "curl $*" >> "$HOME/calls.log"; }
+      code-server() { echo "code-server $*" >> "$HOME/calls.log"; }
+      eval "$cs_block"
+      mkdir -p "$HOME/first"
+      for f in .codex/config.toml .vibe/config.toml; do [ ! -f "$HOME/$f" ] || cp "$HOME/$f" "$HOME/first/${f%%/*}"; done
+      configure_mcp chrome-devtools npx -y chrome-devtools-mcp@latest
+      eval "$cs_block"
+      configure_mcp chrome-devtools npx -y chrome-devtools-mcp@latest
+      echo done > "$HOME/finished" ) >/dev/null 2>&1
+  }
+  CSB="$SB/cs-bare"; mkdir -p "$CSB"
+  run_cs_block "$CSB" 0 0 0
+  check "code-server alone: no extension installed" "$(grep -c '^code-server' "$CSB/calls.log")" "0"
+  check "code-server alone: Copilot off" \
+    "$(jq -r '."chat.disableAIFeatures"' "$CSB/.local/share/code-server/User/settings.json")" "true"
+  check "code-server alone: dark theme" \
+    "$(jq -r '."workbench.colorTheme"' "$CSB/.local/share/code-server/User/settings.json")" "Dark 2026"
+  check "code-server alone: no Claude settings" \
+    "$(jq -r 'keys | map(select(startswith("claudeCode"))) | length' "$CSB/.local/share/code-server/User/settings.json")" "0"
+  check "the password code-server wrote is not left in the base" \
+    "$([ -e "$CSB/.config/code-server" ] && echo left || echo gone)" "gone"
+
+  check "code-server alone: runs to the end under set -e" "$(cat "$CSB/finished" 2>/dev/null)" "done"
+
+  CSA="$SB/cs-all"; mkdir -p "$CSA"
+  run_cs_block "$CSA" 1 1 1
+  check "with the extensions: runs to the end under set -e" "$(cat "$CSA/finished" 2>/dev/null)" "done"
+  check "codex: written on a fresh home" "$(head -n 2 "$CSA/first/.codex" 2>/dev/null | sort | tr '\n' ' ')" \
+    'approval_policy = "never" sandbox_mode = "danger-full-access" '
+  check "vibe: written on a fresh home" "$(cat "$CSA/first/.vibe" 2>/dev/null)" 'default_agent = "auto-approve"'
+  check "the three extensions, in one call" \
+    "$(grep '^code-server' "$CSA/calls.log" | head -n 1)" \
+    "code-server --install-extension anthropic.claude-code --install-extension openai.chatgpt --install-extension mistralai.mistral-vibe-code"
+  check "claude: bypass mode allowed and picked" \
+    "$(jq -r '[."claudeCode.allowDangerouslySkipPermissions", ."claudeCode.initialPermissionMode"] | join(" ")' \
+       "$CSA/.local/share/code-server/User/settings.json")" "true bypassPermissions"
+  check "codex: full access, once, before any table" \
+    "$(head -n 2 "$CSA/.codex/config.toml" | sort | tr '\n' ' '; grep -c '^approval_policy' "$CSA/.codex/config.toml")" \
+    'approval_policy = "never" sandbox_mode = "danger-full-access" 1'
+  check "vibe: auto-approve, once, before any table" \
+    "$(head -n 1 "$CSA/.vibe/config.toml"; grep -c '^default_agent' "$CSA/.vibe/config.toml")" \
+    "$(printf 'default_agent = "auto-approve"\n1')"
+  if python3 -c 'import tomllib' 2>/dev/null; then
+    check "codex: the file parses, keys at the top level" \
+      "$(python3 -c 'import sys,tomllib; d=tomllib.load(open(sys.argv[1],"rb")); print(d["approval_policy"], "chrome-devtools" in d["mcp_servers"])' "$CSA/.codex/config.toml")" \
+      "never True"
+    check "vibe: the file parses, key at the top level" \
+      "$(python3 -c 'import sys,tomllib; d=tomllib.load(open(sys.argv[1],"rb")); print(d["default_agent"], len(d["mcp_servers"]))' "$CSA/.vibe/config.toml")" \
+      "auto-approve 1"
+  else
+    printf '  skip TOML parse checks (no python3 with tomllib)\n'
+  fi
 fi
