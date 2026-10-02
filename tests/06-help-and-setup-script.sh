@@ -222,6 +222,8 @@ section "code-server JSON schemas"
 if ! command -v jq >/dev/null 2>&1 || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
   printf '  skip code-server schema tests (needs jq and bash 4)\n'
 else
+  # A native jq.exe writes CRLF unless -b, and mapfile keeps the CR.
+  if _agent_vm_on_windows; then jq() { command jq -b "$@"; }; fi
   SCH="$SB/schemas"; mkdir -p "$SCH/ext/a" "$SCH/ext/b" "$SCH/web"
   web() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' _; }
   echo '{"contributes":{"jsonValidation":[{"fileMatch":"a.json","url":"https://h.test/s/a"},{"fileMatch":"x","url":"vscode://schemas/x"}]}}' > "$SCH/ext/a/package.json"
@@ -255,6 +257,7 @@ else
     *"could not download the JSON schema https://h.test/gone"*"rc=0") pass "a failed download is a warning, not a failure" ;;
     *) fail "failed download: $out" ;;
   esac
+  unset -f jq
 fi
 
 # =============================================================================
