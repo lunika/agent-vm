@@ -652,7 +652,7 @@ export const en = {
       ['AI agents', 'Pi', 'pi', 'no'],
       ['MCP', 'Chrome DevTools MCP, wired into every installed agent but Pi (no MCP support)', 'mcp-chrome', 'yes'],
       ['MCP', 'Playwright MCP, reusing the same Chromium', 'mcp-playwright', 'no'],
-      ['Editor', 'code-server (VS Code in the browser, for `agent-vm code`), dark theme, GitHub Copilot off', 'code-server', 'no'],
+      ['Editor', 'code-server (VS Code in the browser, for `agent-vm code`), dark theme, GitHub Copilot off, no telemetry', 'code-server', 'no'],
       ['Editor', 'The Claude Code, Codex or Mistral Vibe extension, each starting with no permission prompts, with code-server', 'code-claude, code-codex, code-vibe', 'no'],
     ],
     contentsCode:

@@ -12,7 +12,10 @@
   agents that have an extension get it, the command line, or both. An
   extension ships its own copy of its agent: without the command line,
   `agent-vm claude` (or `codex`, `vibe`) says it is not installed. Dark
-  theme, GitHub Copilot off, no telemetry or update checks.
+  theme, GitHub Copilot disabled, no telemetry, no welcome page, tips,
+  recommendations or experiments. The JSON schemas the editor validates
+  files with (`package.json`, `tsconfig.json`...) are downloaded once by
+  `setup`: opening a file sends no request.
 - The editor's password is made in each VM on first use, never in the base,
   of which every VM is a copy, and printed. Each VM's editor is at
   `http://<vm-name>.localhost:<port>/`, a port of its own from 20000 to

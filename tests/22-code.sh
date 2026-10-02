@@ -24,8 +24,10 @@ else
   rec_has "agent-vm code-server --config /home/u/.config/code-server/agent-vm-lima-x.yaml --bind-addr 127.0.0.1:$first --cookie-suffix $PV" \
     && pass "code-server on the VM's loopback, the VM's own config and cookie" \
     || fail "code: $(grep 'code-server --config' "$REC")"
-  rec_has "--disable-proxy --disable-getting-started-override $PROJ" \
-    && pass "no port proxy, and the project opened" || fail "code flags: $(grep 'code-server --config' "$REC")"
+  rec_has "--disable-telemetry --disable-update-check --disable-workspace-trust --disable-proxy" \
+    && pass "no telemetry, update check or port proxy" || fail "code flags: $(grep 'code-server --config' "$REC")"
+  rec_has "--vscode-option disable-experiments --vscode-option disable-extension=GitHub.copilot-chat $PROJ" \
+    && pass "no experiments, Copilot never loaded, and the project opened" || fail "code flags: $(grep 'code-server --config' "$REC")"
   case "$out" in
     *"Editor: http://$PV.localhost:$first/"*"Password: 0123456789abcdef0123456789abcdef"*)
       pass "the VM's own host name, and the password" ;;

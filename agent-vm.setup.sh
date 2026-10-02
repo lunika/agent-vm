@@ -321,6 +321,55 @@ toml_prepend() {
   mv "$file.tmp" "$file"
 }
 
+# Write to <out> code-server's machine settings with every JSON schema its
+# built-in extensions (in <ext-dir>) name by URL, and every schema those refer
+# to, downloaded now. A json.schemas entry with a URL and its content makes
+# the editor use the content instead of fetching the URL, so with downloads
+# off (the user settings) opening a file sends no request. A failed download
+# only leaves its files unvalidated.
+code_server_schemas() {
+  local ext_dir="$1" out="$2" dir u f r base fetch n=0
+  local -a queue
+  local -A seen
+  dir="$(mktemp -d)"
+  : > "$dir/entries"
+  mapfile -t queue < <(jq -r '.contributes.jsonValidation[]?.url | select(test("^https?://"))' \
+    "$ext_dir"/*/package.json | sort -u)
+  while [[ ${#queue[@]} -gt 0 ]]; do
+    u="${queue[0]}"
+    queue=("${queue[@]:1}")
+    [[ -z "${seen[$u]:-}" ]] || continue
+    seen[$u]=1
+    n=$((n + 1))
+    f="$dir/$n.json"
+    # json.schemastore.org only redirects to www.schemastore.org.
+    fetch="${u%%#*}"
+    fetch="${fetch/#https:\/\/json.schemastore.org\//https://www.schemastore.org/}"
+    if ! curl -fsSL --max-time 30 -o "$f" "$fetch" </dev/null || ! jq -e . "$f" >/dev/null 2>&1; then
+      echo "Warning: could not download the JSON schema $u: files using it are not validated." >&2
+      continue
+    fi
+    jq -c --arg u "$u" '{url: $u, schema: .}' "$f" >> "$dir/entries"
+    # Relative references resolve against the URL the schema was loaded from.
+    # Other schemes (vscode://) are the editor's own.
+    base="${u%%#*}"
+    while IFS= read -r r; do
+      case "$r" in
+        http://*|https://*) ;;
+        *://*) continue ;;
+        /*) r="${base%%://*}://$(printf '%s' "${base#*://}" | cut -d/ -f1)$r" ;;
+        *) r="${base%/*}/$r" ;;
+      esac
+      while [[ "$r" == */./* ]]; do r="${r/\/.\///}"; done
+      while [[ "$r" =~ ^(.*://.*)/[^/]+/\.\./(.*)$ ]]; do r="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"; done
+      queue+=("$r")
+    done < <(jq -r '[.. | objects | ."$ref"? | strings | sub("#.*$"; "") | select(length > 0)] | unique[]' "$f")
+  done
+  mkdir -p "$(dirname "$out")"
+  jq -sc '{"json.schemas": .}' "$dir/entries" > "$out"
+  rm -rf "$dir"
+}
+
 if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
   # The editor of `agent-vm code` (lib/code.sh). No password here: every VM
   # is a copy of this disk, so each one makes its own on first use.
@@ -335,17 +384,48 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
     code-server "${extensions[@]}" </dev/null
   fi
   # chat.disableAIFeatures turns off the GitHub Copilot chat and completions
-  # that code-server ships. The Claude keys start its conversations in bypass
-  # mode, as the managed settings above do for the CLI.
+  # that code-server ships (lib/code.sh also disables the extension).
+  # telemetry.telemetryLevel: code-server's --disable-telemetry leaves the
+  # built-in extensions sending telemetry. The editor downloads no JSON
+  # schema: setup does, once, into the machine settings (code_server_schemas).
+  # The rest is the welcome page, tips, recommendations, experiments and
+  # online settings search.
+  # The Claude keys start its conversations in bypass mode, as the managed
+  # settings above do for the CLI.
   mkdir -p "$HOME/.local/share/code-server/User"
   jq -n --arg claude "$INSTALL_CODE_CLAUDE" '
     {
       "workbench.colorTheme": "Dark 2026",
-      "chat.disableAIFeatures": true
+      "chat.disableAIFeatures": true,
+      "chat.mcp.gallery.enabled": false,
+      "telemetry.telemetryLevel": "off",
+      "telemetry.feedback.enabled": false,
+      "json.schemaDownload.enable": false,
+      "workbench.enableExperiments": false,
+      "workbench.settings.enableNaturalLanguageSearch": false,
+      "workbench.settings.showAISearchToggle": false,
+      "extensions.ignoreRecommendations": true,
+      "workbench.startupEditor": "none",
+      "workbench.tips.enabled": false,
+      "workbench.welcomePage.walkthroughs.openOnInstall": false,
+      "workbench.secondarySideBar.defaultVisibility": "hidden",
+      "remote.autoForwardPorts": false,
+      "update.mode": "none",
+      "update.showReleaseNotes": false
     } + if $claude == "1" then {
       "claudeCode.allowDangerouslySkipPermissions": true,
-      "claudeCode.initialPermissionMode": "bypassPermissions"
+      "claudeCode.initialPermissionMode": "bypassPermissions",
+      "claudeCode.hideOnboarding": true
     } else {} end' > "$HOME/.local/share/code-server/User/settings.json"
+  # The .deb's /usr/bin/code-server is a script running /usr/lib/code-server;
+  # a standalone install is a link into its own directory.
+  cs_root=/usr/lib/code-server
+  if [[ ! -d "$cs_root/lib/vscode/extensions" ]]; then
+    cs_root="$(dirname "$(dirname "$(readlink -f "$(command -v code-server)")")")"
+  fi
+  echo "Downloading the JSON schemas the editor uses..."
+  code_server_schemas "$cs_root/lib/vscode/extensions" \
+    "$HOME/.local/share/code-server/Machine/settings.json"
   # Codex and Vibe have no setting for it: their extensions start in the mode
   # the agent's own config names. These match the flags the command line gets
   # (_agent_vm_agent in agent-vm.sh).

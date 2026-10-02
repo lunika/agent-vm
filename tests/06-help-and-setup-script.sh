@@ -214,6 +214,50 @@ else
 fi
 
 # =============================================================================
+section "code-server JSON schemas"
+# =============================================================================
+# code_server_schemas against a fake code-server and a curl serving files of
+# $SCH/web, named after the URL, recording what it was asked for. It runs in
+# the VM, under bash 4 or later.
+if ! command -v jq >/dev/null 2>&1 || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  printf '  skip code-server schema tests (needs jq and bash 4)\n'
+else
+  SCH="$SB/schemas"; mkdir -p "$SCH/ext/a" "$SCH/ext/b" "$SCH/web"
+  web() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' _; }
+  echo '{"contributes":{"jsonValidation":[{"fileMatch":"a.json","url":"https://h.test/s/a"},{"fileMatch":"x","url":"vscode://schemas/x"}]}}' > "$SCH/ext/a/package.json"
+  echo '{"contributes":{"jsonValidation":[{"fileMatch":"b.json","url":"https://json.schemastore.org/b"},{"fileMatch":"g","url":"https://h.test/gone"}]}}' > "$SCH/ext/b/package.json"
+  # a: an absolute ref, a relative one with ./ and a fragment, a local one,
+  # and one to the editor's own schemas.
+  echo '{"$ref":"#/definitions/x","definitions":{"x":{"$ref":"https://h.test/abs.json"},"y":{"$ref":"./rel.json#/z"},"z":{"$ref":"vscode://schemas/settings"},"w":{"properties":{"$ref":{"type":"string"}}}}}' > "$SCH/web/$(web https://h.test/s/a)"
+  echo '{"type":"object"}' > "$SCH/web/$(web https://h.test/abs.json)"
+  echo '{"$ref":"../top.json"}' > "$SCH/web/$(web https://h.test/s/rel.json)"
+  echo '{"type":"string"}' > "$SCH/web/$(web https://h.test/top.json)"
+  echo '{"type":"number"}' > "$SCH/web/$(web https://www.schemastore.org/b)"
+  out="$( ( curl() {
+              local o="" u=""
+              while [ $# -gt 0 ]; do case "$1" in -o) o="$2"; shift 2 ;; -*) shift ;; *) u="$1"; shift ;; esac; done
+              echo "$u" >> "$SCH/fetched"
+              [ -f "$SCH/web/$(web "$u")" ] || return 22
+              cp "$SCH/web/$(web "$u")" "$o"
+            }
+            set -euo pipefail
+            eval "$(awk '/^code_server_schemas\(\) \{/,/^\}/' "$SETUP_SH")"
+            code_server_schemas "$SCH/ext" "$SCH/machine/settings.json"; echo "rc=$?" ) 2>&1)"
+  check "every schema named, and every one they refer to, by the URL the editor asks" \
+    "$(jq -r '."json.schemas"[].url' "$SCH/machine/settings.json" 2>/dev/null | sort | tr '\n' ' ')" \
+    "https://h.test/abs.json https://h.test/s/a https://h.test/s/rel.json https://h.test/top.json https://json.schemastore.org/b "
+  check "each with its content" \
+    "$(jq -r '."json.schemas"[] | select(.url == "https://h.test/top.json") | .schema.type' "$SCH/machine/settings.json" 2>/dev/null)" "string"
+  check "json.schemastore.org fetched from www.schemastore.org, where it redirects" \
+    "$(grep -c 'json.schemastore.org' "$SCH/fetched"; grep -c '^https://www.schemastore.org/b$' "$SCH/fetched")" "$(printf '0\n1')"
+  check "the editor's own schemas are left alone" "$(grep -c vscode "$SCH/fetched")" "0"
+  case "$out" in
+    *"could not download the JSON schema https://h.test/gone"*"rc=0") pass "a failed download is a warning, not a failure" ;;
+    *) fail "failed download: $out" ;;
+  esac
+fi
+
+# =============================================================================
 section "code-server install block"
 # =============================================================================
 # Lifted out like the Pi block, with curl and code-server recorded instead of
@@ -235,6 +279,7 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
       HAS_CLAUDE="$2" HAS_CODEX="$3" HAS_VIBE="$4" INSTALL_OPENCODE=0
       curl() { echo "curl $*" >> "$HOME/calls.log"; }
       code-server() { echo "code-server $*" >> "$HOME/calls.log"; }
+      code_server_schemas() { echo "schemas $*" >> "$HOME/calls.log"; }
       eval "$cs_block"
       mkdir -p "$HOME/first"
       for f in .codex/config.toml .vibe/config.toml; do [ ! -f "$HOME/$f" ] || cp "$HOME/$f" "$HOME/first/${f%%/*}"; done
@@ -250,6 +295,14 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
     "$(jq -r '."chat.disableAIFeatures"' "$CSB/.local/share/code-server/User/settings.json")" "true"
   check "code-server alone: dark theme" \
     "$(jq -r '."workbench.colorTheme"' "$CSB/.local/share/code-server/User/settings.json")" "Dark 2026"
+  check "code-server alone: no telemetry, no experiments" \
+    "$(jq -r '[."telemetry.telemetryLevel", ."workbench.enableExperiments"] | map(tostring) | join(" ")' \
+       "$CSB/.local/share/code-server/User/settings.json")" "off false"
+  check "code-server alone: the editor downloads no schema" \
+    "$(jq -r '."json.schemaDownload.enable"' "$CSB/.local/share/code-server/User/settings.json")" "false"
+  check "code-server alone: setup puts them in the machine settings" \
+    "$(grep '^schemas' "$CSB/calls.log" | head -n 1 | sed 's|^schemas [^ ]*/lib/vscode/extensions |schemas <ext> |')" \
+    "schemas <ext> $CSB/.local/share/code-server/Machine/settings.json"
   check "code-server alone: no Claude settings" \
     "$(jq -r 'keys | map(select(startswith("claudeCode"))) | length' "$CSB/.local/share/code-server/User/settings.json")" "0"
   check "the password code-server wrote is not left in the base" \
@@ -266,9 +319,9 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
   check "the three extensions, in one call" \
     "$(grep '^code-server' "$CSA/calls.log" | head -n 1)" \
     "code-server --install-extension anthropic.claude-code --install-extension openai.chatgpt --install-extension mistralai.mistral-vibe-code"
-  check "claude: bypass mode allowed and picked" \
-    "$(jq -r '[."claudeCode.allowDangerouslySkipPermissions", ."claudeCode.initialPermissionMode"] | join(" ")' \
-       "$CSA/.local/share/code-server/User/settings.json")" "true bypassPermissions"
+  check "claude: bypass mode allowed and picked, no onboarding checklist" \
+    "$(jq -r '[."claudeCode.allowDangerouslySkipPermissions", ."claudeCode.initialPermissionMode", ."claudeCode.hideOnboarding"] | map(tostring) | join(" ")' \
+       "$CSA/.local/share/code-server/User/settings.json")" "true bypassPermissions true"
   check "codex: full access, once, before any table" \
     "$(head -n 2 "$CSA/.codex/config.toml" | sort | tr '\n' ' '; grep -c '^approval_policy' "$CSA/.codex/config.toml")" \
     'approval_policy = "never" sandbox_mode = "danger-full-access" 1'

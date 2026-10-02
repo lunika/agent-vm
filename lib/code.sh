@@ -168,6 +168,9 @@ _agent_vm_code_session() {
   # The cookie suffix keeps sessions apart at 127.0.0.1, where two editors
   # would overwrite each other's cookie. --disable-proxy: no route from the
   # browser to the VM's other ports, and the proxy is where CVE-2025-47269 was.
+  # The --vscode-option ones reach the VS Code server inside: no experiments,
+  # and the built-in Copilot Chat never loads (it updates itself otherwise).
+  # The settings written at setup do the rest (agent-vm.setup.sh).
   _agent_vm_lima_run "$vm_name" "$host_dir" "$want_tty" code-server \
     --config "$cfg" \
     --bind-addr "127.0.0.1:$port" \
@@ -178,6 +181,8 @@ _agent_vm_code_session() {
     --disable-workspace-trust \
     --disable-proxy \
     --disable-getting-started-override \
+    --vscode-option disable-experiments \
+    --vscode-option disable-extension=GitHub.copilot-chat \
     "$host_dir" || st=$?
   [[ -z "$opener" ]] || kill "$opener" 2>/dev/null
   return "$st"
