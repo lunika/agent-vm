@@ -91,6 +91,12 @@ _agent_vm_unsafe_project() {
         return 0 ;;
     esac
   done
+  # The read-only names apply below a share's root: a share that is a .git,
+  # or inside one, is writable whole.
+  if _agent_vm_under_readonly_name "${dir#/}"; then
+    printf 'is, or is inside, a folder git or Mercurial keeps its repository in (.git, .hg)\n'
+    return 0
+  fi
   return 1
 }
 

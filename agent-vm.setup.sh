@@ -390,8 +390,6 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
   # schema: setup does, once, into the machine settings (code_server_schemas).
   # The rest is the welcome page, tips, recommendations, experiments and
   # online settings search.
-  # The Claude keys start its conversations in bypass mode, as the managed
-  # settings above do for the CLI.
   mkdir -p "$HOME/.local/share/code-server/User"
   jq -n --arg claude "$INSTALL_CODE_CLAUDE" '
     {
@@ -413,8 +411,6 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
       "update.mode": "none",
       "update.showReleaseNotes": false
     } + if $claude == "1" then {
-      "claudeCode.allowDangerouslySkipPermissions": true,
-      "claudeCode.initialPermissionMode": "bypassPermissions",
       "claudeCode.hideOnboarding": true
     } else {} end' > "$HOME/.local/share/code-server/User/settings.json"
   # The .deb's /usr/bin/code-server is a script running /usr/lib/code-server;
@@ -424,8 +420,19 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
     cs_root="$(dirname "$(dirname "$(readlink -f "$(command -v code-server)")")")"
   fi
   echo "Downloading the JSON schemas the editor uses..."
-  code_server_schemas "$cs_root/lib/vscode/extensions" \
-    "$HOME/.local/share/code-server/Machine/settings.json"
+  cs_machine="$HOME/.local/share/code-server/Machine/settings.json"
+  code_server_schemas "$cs_root/lib/vscode/extensions" "$cs_machine"
+  # Claude's conversations start in bypass mode, as the managed settings above
+  # do for the CLI. These keys are machine-scoped: code-server ignores them in
+  # the user settings.
+  if [[ "$INSTALL_CODE_CLAUDE" == "1" ]]; then
+    mkdir -p "$(dirname "$cs_machine")"
+    { if [[ -f "$cs_machine" ]]; then cat "$cs_machine"; else echo '{}'; fi; } | jq '. + {
+      "claudeCode.allowDangerouslySkipPermissions": true,
+      "claudeCode.initialPermissionMode": "bypassPermissions"
+    }' > "$cs_machine.tmp"
+    mv "$cs_machine.tmp" "$cs_machine"
+  fi
   # Codex and Vibe have no setting for it: their extensions start in the mode
   # the agent's own config names. These match the flags the command line gets
   # (_agent_vm_agent in agent-vm.sh).

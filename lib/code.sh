@@ -1,4 +1,4 @@
-# --- code: code-server in the VM, opened in the host's browser ----------------
+# --- code: code-server in the VM, for the host's browser ----------------------
 
 # Run in the VM before the editor starts, with the candidate ports as
 # arguments. Prints `missing` without code-server, else its config file and
@@ -58,35 +58,19 @@ _agent_vm_host_port_open() {
   (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
 
-# The editor's <url> on <port>, and its <password>. Safari leaves *.localhost
-# to macOS, which may not resolve it: 127.0.0.1 then, in a window of its own.
+# The editor's <url> on <port>, its <password>, and a last line <note>, in a
+# box. Safari leaves *.localhost to macOS, which may not resolve it:
+# 127.0.0.1 then, in a window of its own.
 _agent_vm_code_say() {
-  echo "Editor: $1"
-  echo "Password: $3"
-  if [[ "$(uname -s)" == Darwin ]]; then
-    echo "(Safari may not resolve it: then http://127.0.0.1:$2/, in a private window kept for this editor, so pages from other VMs never get its cookie.)"
-  fi
-}
-
-# Open <url> in the host's browser once Lima forwards <port>.
-_agent_vm_code_open() {
-  local url="$1" port="$2" i=0
-  until _agent_vm_host_port_open "$port"; do
-    i=$((i + 1))
-    if [[ $i -ge 60 ]]; then
-      echo "Warning: nothing on 127.0.0.1:$port after 60s: Lima did not forward the editor's port." >&2
-      return 1
+  {
+    echo "  Address:   $1"
+    echo "  Password:  $3"
+    if [[ "$(uname -s)" == Darwin ]]; then
+      echo ""
+      echo "If Safari does not open it: http://127.0.0.1:$2/ in a private window kept for this editor, so pages from other VMs never get its cookie."
     fi
-    sleep 1
-  done
-  if _agent_vm_on_windows; then
-    start "$url"
-  elif [[ "$(uname -s)" == Darwin ]]; then
-    open "$url"
-  elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$url"
-  fi >/dev/null 2>&1
-  return 0
+    [[ -z "${4:-}" ]] || printf '\n%s\n' "$4"
+  } | _agent_vm_box "VS Code"
 }
 
 # `agent-vm code`: code-server for the project, in the foreground until
@@ -104,7 +88,7 @@ _agent_vm_code() {
 
 _agent_vm_code_session() {
   local vm_name="$1" host_dir="$2" ports out line cfg="" pw="" running="" listening=" " port="" p
-  local url opener="" want_tty="" st=0
+  local url want_tty="" st=0
   ports="$(_agent_vm_code_ports "$vm_name")" || {
     echo "Error: cannot hash the VM name: install shasum or sha256sum." >&2
     return 1
@@ -135,9 +119,7 @@ _agent_vm_code_session() {
 
   if [[ -n "$running" ]]; then
     url="http://$(_agent_vm_code_host "$vm_name"):$running/"
-    echo "The editor of VM '$vm_name' already runs, from another terminal."
-    _agent_vm_code_say "$url" "$running" "$pw"
-    [[ -t 1 ]] && _agent_vm_code_open "$url" "$running"
+    _agent_vm_code_say "$url" "$running" "$pw" "The editor of VM '$vm_name' already runs, from another terminal."
     return 0
   fi
 
@@ -155,12 +137,7 @@ _agent_vm_code_session() {
   fi
 
   url="http://$(_agent_vm_code_host "$vm_name"):$port/"
-  _agent_vm_code_say "$url" "$port" "$pw"
-  echo "The password is kept in the VM, in $cfg. Ctrl-C stops the editor."
-  if [[ -t 1 ]]; then
-    _agent_vm_code_open "$url" "$port" &
-    opener=$!
-  fi
+  _agent_vm_code_say "$url" "$port" "$pw" "The password is kept in the VM, in $cfg. Ctrl-C stops the editor."
   # A terminal for Ctrl-C to reach code-server: without one, it would keep
   # running in the VM once this command ends.
   [[ -t 0 && -t 1 ]] && want_tty=1
@@ -171,7 +148,13 @@ _agent_vm_code_session() {
   # The --vscode-option ones reach the VS Code server inside: no experiments,
   # and the built-in Copilot Chat never loads (it updates itself otherwise).
   # The settings written at setup do the rest (agent-vm.setup.sh).
-  _agent_vm_lima_run "$vm_name" "$host_dir" "$want_tty" code-server \
+  # Claude Code's login pages open without the link protection prompt:
+  # these paths only, matched by segment (code-server 4.100+).
+  # VSCODE_PROXY_URI: links to localhost:<port> (or 127.0.0.1, 0.0.0.0) open
+  # at localhost:<port> here, where Lima forwards the VM's ports, instead of
+  # code-server's /proxy/<port>/, which --disable-proxy turns off.
+  _agent_vm_lima_run "$vm_name" "$host_dir" "$want_tty" \
+    'VSCODE_PROXY_URI=http://localhost:{{port}}/' code-server \
     --config "$cfg" \
     --bind-addr "127.0.0.1:$port" \
     --cookie-suffix "$vm_name" \
@@ -181,9 +164,10 @@ _agent_vm_code_session() {
     --disable-workspace-trust \
     --disable-proxy \
     --disable-getting-started-override \
+    --link-protection-trusted-domains https://claude.com/cai/oauth \
+    --link-protection-trusted-domains https://platform.claude.com/oauth \
     --vscode-option disable-experiments \
     --vscode-option disable-extension=GitHub.copilot-chat \
     "$host_dir" || st=$?
-  [[ -z "$opener" ]] || kill "$opener" 2>/dev/null
   return "$st"
 }

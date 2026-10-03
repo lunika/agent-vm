@@ -308,11 +308,11 @@ _agent_vm_doctor() {
       $d warn "$hooks_what, which the VM can still write" \
         "The next start (after 'agent-vm stop' if it runs) makes every '$hooks_name' in the project read-only."
     fi
-  done <<< "$(_agent_vm_project_hooks "$host_dir")"
+  done <<< "$(_agent_vm_share_hooks "$host_dir")"
   # Git config the VM can write, or commands it names in the project (see
   # _agent_vm_repo_config_risks).
   local git_risks
-  git_risks="$(_agent_vm_project_config_risks "$host_dir")"
+  git_risks="$(_agent_vm_share_config_risks "$host_dir")"
   if [[ -n "$git_risks" ]]; then
     $d warn "git on this machine uses these, and the VM can write them:"
     printf '%s\n' "$git_risks" | sed 's/^/        /'

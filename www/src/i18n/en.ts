@@ -183,7 +183,7 @@ export const en = {
       },
       {
         title: 'Resize on the fly',
-        body: 'A new VM gets the template’s 10 GB of disk, 3 GB of memory and 1 CPU. Pass another value and the VM is reconfigured, after asking if it is running. Disk only grows. CPU and memory are capped at half the host, per VM.',
+        body: 'A new VM gets the template’s 10 GB of disk, 3 GB of memory (4 with code-server picked in the wizard) and 1 CPU. Pass another value and the VM is reconfigured, after asking if it is running. Disk only grows. CPU and memory are capped at half the host, per VM.',
         code: 'agent-vm --disk 50 opencode\nagent-vm --memory 16 --cpus 8 shell\nagent-vm --reset claude   # re-clone from the base template',
       },
       {
@@ -229,7 +229,7 @@ export const en = {
         rows: [
           ['shell, sh', 'Open a zsh shell in the VM. `-c "…"` runs a one-shot command through a login shell.'],
           ['run <cmd> [args]', 'Run a command with no shell. `--tty` allocates a PTY for TUIs.'],
-          ['code', 'Serve VS Code (code-server) from the VM at `http://<vm-name>.localhost:<port>/` and open it in your browser, until Ctrl-C. Its password is made in the VM on first use and printed. Needs `code-server` or a `code-*` name at setup ([What is in the VM](#what-is-in-the-vm)).'],
+          ['code', 'Serve VS Code (code-server) from the VM at `http://<vm-name>.localhost:<port>/`, until Ctrl-C, for you to open in your browser. Its password is made in the VM on first use and printed with the address. Needs `code-server` or a `code-*` name at setup ([What is in the VM](#what-is-in-the-vm)).'],
         ],
       },
       {

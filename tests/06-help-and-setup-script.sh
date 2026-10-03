@@ -322,9 +322,16 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
   check "the three extensions, in one call" \
     "$(grep '^code-server' "$CSA/calls.log" | head -n 1)" \
     "code-server --install-extension anthropic.claude-code --install-extension openai.chatgpt --install-extension mistralai.mistral-vibe-code"
-  check "claude: bypass mode allowed and picked, no onboarding checklist" \
-    "$(jq -r '[."claudeCode.allowDangerouslySkipPermissions", ."claudeCode.initialPermissionMode", ."claudeCode.hideOnboarding"] | map(tostring) | join(" ")' \
-       "$CSA/.local/share/code-server/User/settings.json")" "true bypassPermissions true"
+  # The permission keys are machine-scoped: code-server reads them from the
+  # machine settings only.
+  check "claude: bypass mode allowed and picked, in the machine settings" \
+    "$(jq -r '[."claudeCode.allowDangerouslySkipPermissions", ."claudeCode.initialPermissionMode"] | map(tostring) | join(" ")' \
+       "$CSA/.local/share/code-server/Machine/settings.json")" "true bypassPermissions"
+  check "claude: and not in the user settings, where they do nothing" \
+    "$(jq -r 'keys | map(select(startswith("claudeCode.") and . != "claudeCode.hideOnboarding")) | length' \
+       "$CSA/.local/share/code-server/User/settings.json")" "0"
+  check "claude: no onboarding checklist" \
+    "$(jq -r '."claudeCode.hideOnboarding"' "$CSA/.local/share/code-server/User/settings.json")" "true"
   check "codex: full access, once, before any table" \
     "$(head -n 2 "$CSA/.codex/config.toml" | sort | tr '\n' ' '; grep -c '^approval_policy' "$CSA/.codex/config.toml")" \
     'approval_policy = "never" sandbox_mode = "danger-full-access" 1'

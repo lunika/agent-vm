@@ -22,9 +22,9 @@ Commands:
                      use 'shell -c "..."' instead; pass --tty for TUIs like
                      opencode, vibe, htop, etc.)
   code               Serve VS Code (code-server) from the VM, at
-                     http://<vm-name>.localhost:<port>/, and open it in the
-                     browser, until Ctrl-C. Its password is made in each VM
-                     and printed. Opt-in at setup, with the agents'
+                     http://<vm-name>.localhost:<port>/, until Ctrl-C. The
+                     address and the password, made in each VM, are
+                     printed: open it in your browser. Opt-in at setup, with the agents'
                      extensions or without: --preinstall=default,code-claude
                      (or code-codex, code-vibe, code-server)
   stop [vm-name]     Stop the VM for the current directory, or the named one

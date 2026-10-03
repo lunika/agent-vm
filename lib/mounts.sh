@@ -82,6 +82,111 @@ _agent_vm_project_mountpoint() {
   printf '%s\n' "$p"
 }
 
+# The entries of ~/.agent-vm/volumes for the project <dir>, one per line,
+# four fields separated by |, which none can hold: source (~ expanded,
+# existing), destination (as written, maybe empty or relative), mode (ro or
+# rw), and the entry as source:destination:mode, for messages. Entries that
+# cannot be used are skipped, with a warning unless <quiet> is set. Nothing
+# is created: that is _agent_vm_build_mounts_json's.
+_agent_vm_volume_entries() {
+  local host_dir="$1" quiet="${2:-}" raw line mounts_file="$AGENT_VM_STATE_DIR/volumes"
+  [[ -f "$mounts_file" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    line="${raw%%#*}"                                           # strip comments
+    line="${line#"${line%%[![:space:]]*}"}"                     # trim leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"                     # trim trailing whitespace
+    [[ -z "$line" ]] && continue
+    # A control character (a tab, an ESC...) is invalid unescaped in the JSON
+    # handed to limactl. The CR of a CRLF file went with the trim above.
+    if [[ "$line" == *[[:cntrl:]]* ]]; then
+      _agent_vm_volume_warn "$quiet" "Mount entry '${raw}' (from ~/.agent-vm/volumes) contains a control character, skipping."
+      continue
+    fi
+    # An optional 4th field, after an explicit mode, limits the entry to the
+    # projects it matches: source:destination:mode:filter. An empty one
+    # (`src:dst:rw:`) is refused, not read as "no filter": that would mount
+    # an entry meant for one project in every project.
+    local filter="" has_filter="" before="${line%:*}"
+    if [[ "$line" == *:* && ( "$before" == *:ro || "$before" == *:rw ) ]]; then
+      filter="${line##*:}"
+      has_filter=1
+      line="$before"
+    fi
+    if [[ -n "$has_filter" ]]; then
+      if [[ -z "$filter" ]]; then
+        _agent_vm_volume_warn "$quiet" "Mount entry '${raw}' (from ~/.agent-vm/volumes) has an empty project filter; refusing to mount it in every project. Skipping."
+        continue
+      fi
+      if [[ -n "$quiet" ]]; then
+        _agent_vm_volume_matches "$filter" "$host_dir" 2>/dev/null || continue
+      else
+        _agent_vm_volume_matches "$filter" "$host_dir" || continue
+      fi
+    fi
+    # Parse source[:destination][:mode] syntax (like docker compose volumes).
+    # The trailing mode segment is only recognized when it equals "ro" or
+    # "rw": anything else is treated as a destination path.
+    local src="$line" dst="" mode="ro" entry="$line"
+    if [[ "$line" == *:ro || "$line" == *:rw ]]; then
+      mode="${line##*:}"
+      line="${line%:*}"
+    fi
+    if [[ "$line" == *:* ]]; then
+      src="${line%%:*}"
+      dst="${line#*:}"
+    else
+      src="$line"
+    fi
+    # A ':' left in the destination is a field out of place: a project
+    # without a mode before it (`src:dst:/p`), a mode after it
+    # (`src:dst:/p:rw`), a second mode, a fifth field. Read as a destination,
+    # the entry would be mounted in every project, the project filter lost.
+    if [[ "$dst" == *:* ]]; then
+      _agent_vm_volume_warn "$quiet" "Mount entry '${raw}' (from ~/.agent-vm/volumes) does not read as source:destination:mode:project (the mode goes before the project, and is needed with one). Skipping."
+      continue
+    fi
+    src="${src/#\~/$HOME}"                                      # expand ~
+    # Reject characters that would break JSON interpolation below or the
+    # pipe-separated cache format used for file mounts.
+    if [[ "$src" == *[$'"\\\n|']* || "$dst" == *[$'"\\\n|']* ]]; then
+      _agent_vm_volume_warn "$quiet" "Mount entry '${raw}' (from ~/.agent-vm/volumes) contains invalid characters (quote/backslash/newline/pipe), skipping."
+      continue
+    fi
+    if [[ ! -e "$src" ]]; then
+      _agent_vm_volume_warn "$quiet" "Mount path '${src}' (from ~/.agent-vm/volumes) does not exist, skipping."
+      continue
+    fi
+    # What is refused as a project, refused as a volume: agent-vm's state
+    # (the VM could add a share for its next start), Lima's, the home folder.
+    local why
+    if why="$(_agent_vm_unsafe_project "$src")"; then
+      _agent_vm_volume_warn "$quiet" "Mount path '${src}' (from ~/.agent-vm/volumes) $why, skipping."
+      continue
+    fi
+    # Mounted at the project, or above it, it would hide the project's share.
+    if [[ "$dst" == /* && "${host_dir%/}/" == "${dst%/}/"* ]]; then
+      _agent_vm_volume_warn "$quiet" "Mount destination '${dst}' (from ~/.agent-vm/volumes) would cover the project, skipping."
+      continue
+    fi
+    printf '%s|%s|%s|%s\n' "$src" "$dst" "$mode" "$entry"
+  done < "$mounts_file"
+}
+
+# A warning about ~/.agent-vm/volumes, unless <quiet> is set.
+_agent_vm_volume_warn() {
+  [[ -n "$1" ]] || echo "Warning: $2" >&2
+}
+
+# The writable directories of ~/.agent-vm/volumes for the project <dir>, one
+# per line: shares the VM can write besides the project. Read quietly: the
+# start that mounts them says what is wrong with an entry.
+_agent_vm_rw_volume_dirs() {
+  local src dst mode entry
+  while IFS='|' read -r src dst mode entry; do
+    [[ "$mode" == rw && -d "$src" && ! -f "$src" ]] && printf '%s\n' "$src"
+  done <<< "$(_agent_vm_volume_entries "$1" 1)"
+}
+
 # _agent_vm_build_mounts_json <vm> <dir> [<writable>] [<names>]: the .mounts
 # JSON array for `limactl edit --set`. The project <dir> first, writable
 # unless <writable> is false, then the entries of ~/.agent-vm/volumes
@@ -99,9 +204,12 @@ _agent_vm_project_mountpoint() {
 # the VM.
 _agent_vm_build_mounts_json() {
   local vm_name="$1" host_dir="$2" project_writable="${3:-true}" sshfs=""
+  # cache: false, sshfs's -o cache=no: with its cache, a file the host adds,
+  # deletes or extends shows as it was for up to 20 seconds, and an agent
+  # writing back what it read would undo the host's change.
   case "${4:-}" in
-    1)  sshfs=", \"sshfs\": {\"sftpDriver\": \"builtin\", \"readonlyNames\": $(_agent_vm_readonly_names "$host_dir")}" ;;
-    \[*) sshfs=", \"sshfs\": {\"sftpDriver\": \"builtin\", \"readonlyNames\": $4}" ;;
+    1)  sshfs=", \"sshfs\": {\"sftpDriver\": \"builtin\", \"cache\": false, \"readonlyNames\": $(_agent_vm_readonly_names "$host_dir")}" ;;
+    \[*) sshfs=", \"sshfs\": {\"sftpDriver\": \"builtin\", \"cache\": false, \"readonlyNames\": $4}" ;;
   esac
   # Every entry names its mount point: agent-vm addresses the guest side by the
   # shell's spelling of the path (--workdir, the write probe), which on Windows
@@ -112,68 +220,9 @@ _agent_vm_build_mounts_json() {
   local file_mounts_cache="$AGENT_VM_STATE_DIR/.agent-vm-file-mounts-${vm_name}"
 
   if [[ -f "$mounts_file" ]]; then
-    local staging_idx=0 raw line
-    while IFS= read -r raw || [[ -n "$raw" ]]; do
-      line="${raw%%#*}"                                           # strip comments
-      line="${line#"${line%%[![:space:]]*}"}"                     # trim leading whitespace
-      line="${line%"${line##*[![:space:]]}"}"                     # trim trailing whitespace
-      [[ -z "$line" ]] && continue
-      # A control character (a tab, an ESC...) is invalid unescaped in the JSON
-      # handed to limactl. The CR of a CRLF file went with the trim above.
-      if [[ "$line" == *[[:cntrl:]]* ]]; then
-        echo "Warning: Mount entry '${raw}' (from ~/.agent-vm/volumes) contains a control character, skipping." >&2
-        continue
-      fi
-      # An optional 4th field, after an explicit mode, limits the entry to the
-      # projects it matches: source:destination:mode:filter. An empty one
-      # (`src:dst:rw:`) is refused, not read as "no filter": that would mount
-      # an entry meant for one project in every project.
-      local filter="" has_filter="" before="${line%:*}"
-      if [[ "$line" == *:* && ( "$before" == *:ro || "$before" == *:rw ) ]]; then
-        filter="${line##*:}"
-        has_filter=1
-        line="$before"
-      fi
-      if [[ -n "$has_filter" ]]; then
-        if [[ -z "$filter" ]]; then
-          echo "Warning: Mount entry '${raw}' (from ~/.agent-vm/volumes) has an empty project filter; refusing to mount it in every project. Skipping." >&2
-          continue
-        fi
-        _agent_vm_volume_matches "$filter" "$host_dir" || continue
-      fi
-      # Parse source[:destination][:mode] syntax (like docker compose volumes).
-      # The trailing mode segment is only recognized when it equals "ro" or
-      # "rw": anything else is treated as a destination path.
-      local src="$line" dst="" mode="ro"
-      if [[ "$line" == *:ro || "$line" == *:rw ]]; then
-        mode="${line##*:}"
-        line="${line%:*}"
-      fi
-      if [[ "$line" == *:* ]]; then
-        src="${line%%:*}"
-        dst="${line#*:}"
-      else
-        src="$line"
-      fi
-      # A ':' left in the destination is a field out of place: a project
-      # without a mode before it (`src:dst:/p`), a mode after it
-      # (`src:dst:/p:rw`), a second mode, a fifth field. Read as a destination,
-      # the entry would be mounted in every project, the project filter lost.
-      if [[ "$dst" == *:* ]]; then
-        echo "Warning: Mount entry '${raw}' (from ~/.agent-vm/volumes) does not read as source:destination:mode:project (the mode goes before the project, and is needed with one). Skipping." >&2
-        continue
-      fi
-      src="${src/#\~/$HOME}"                                      # expand ~
-      # Reject characters that would break JSON interpolation below or the
-      # pipe-separated cache format used for file mounts.
-      if [[ "$src" == *[$'"\\\n|']* || "$dst" == *[$'"\\\n|']* ]]; then
-        echo "Warning: Mount entry '${raw}' (from ~/.agent-vm/volumes) contains invalid characters (quote/backslash/newline/pipe), skipping." >&2
-        continue
-      fi
-      if [[ ! -e "$src" ]]; then
-        echo "Warning: Mount path '${src}' (from ~/.agent-vm/volumes) does not exist, skipping." >&2
-        continue
-      fi
+    local staging_idx=0 src dst mode line
+    while IFS='|' read -r src dst mode line; do
+      [[ -n "$src" ]] || continue
       if [[ -n "$dst" && "$dst" != /* ]]; then
         dst="$(_agent_vm_project_mountpoint "$host_dir" "$dst" "$src")" || continue
       fi
@@ -215,7 +264,7 @@ _agent_vm_build_mounts_json() {
         fi
       fi
       mounts_json+=", {\"location\": \"$(_agent_vm_host_path "$src")\", \"mountPoint\": \"${dst:-$src}\", \"writable\": ${writable}${sshfs}}"
-    done < "$mounts_file"
+    done <<< "$(_agent_vm_volume_entries "$host_dir")"
   fi
   mounts_json+="]"
 
@@ -264,6 +313,52 @@ _agent_vm_mounts_have_readonly_names() {
   [[ -f "$record" ]] && grep -qF "\"readonlyNames\": $2" "$record"
 }
 
+# 0 when Lima's config for <vm> gives every share the builtin SFTP server and
+# the read-only names <names> (a JSON array; any names when empty), with the
+# mount type that serves them. Asked of Lima, not of the record: a share set
+# outside agent-vm (by hand, or from Lima's _config/override.yaml or
+# default.yaml, which Lima adds to every VM) has none, and the VM can write
+# the .git it holds.
+_agent_vm_live_shares_protected() {
+  local out want='"readonlyNames":['
+  out="$(limactl list --format '{{.Config.MountType}} {{json .Config.Mounts}}' "$1" 2>/dev/null)" || return 1
+  [[ "${out%% *}" == reverse-sshfs ]] || return 1
+  # As Lima prints it: no space after the commas (a name may hold a space).
+  [[ -z "${2:-}" ]] || want="\"readonlyNames\":${2//\", \"/\",\"}"
+  # One record per share: what follows each "location".
+  printf '%s\n' "${out#* }" | awk -v want="$want" 'BEGIN { RS = "\"location\"" }
+    NR > 1 { n++; if (index($0, "\"sftpDriver\":\"builtin\"") == 0 || index($0, want) == 0) bad++ }
+    END { exit (n > 0 && bad == 0) ? 0 : 1 }'
+}
+
+# 1 when the running <vm> is served by another limactl than the one on PATH,
+# which agent-vm checked: a stock Lima started it (by hand, at login, or from
+# a shell with another PATH) and ignores the read-only names, or an older
+# build since replaced. 0 when it is the same, or when that cannot be told
+# (Windows, no pid file): never a reason to stop on its own.
+_agent_vm_hostagent_is_limactl() {
+  local pid exe mine
+  _agent_vm_on_windows && return 0
+  pid="$(cat "$(_agent_vm_lima_home)/$1/ha.pid" 2>/dev/null)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  if [[ -e "/proc/$pid/exe" ]]; then
+    exe="$(readlink "/proc/$pid/exe" 2>/dev/null)"
+  else
+    exe="$(ps -o comm= -p "$pid" 2>/dev/null)"
+  fi
+  [[ "$exe" == /* ]] || return 0
+  mine="$(_agent_vm_physical_file "$(command -v limactl)")" || return 0
+  [[ "$(_agent_vm_physical_file "$exe" 2>/dev/null)" == "$mine" ]] && return 0
+  # Another path to the same build (a shim on PATH): the same version.
+  [[ -x "$exe" && "$("$exe" --version 2>/dev/null)" == "$(limactl --version 2>/dev/null)" ]]
+}
+
+# 0 when <vm> is recorded with sshfs's cache off (see _agent_vm_build_mounts_json).
+_agent_vm_mounts_cache_off() {
+  local record="$AGENT_VM_STATE_DIR/.agent-vm-mounts-$1"
+  [[ -f "$record" ]] && grep -q '"cache": false' "$record"
+}
+
 # _agent_vm_push_env_and_probe <vm> <dir> <payload> [<env> [<runtime>]], in
 # one round trip:
 # - writes ~/.agent-vm.env in the VM (mode 600, sourced by its ~/.zshenv):
@@ -271,16 +366,29 @@ _agent_vm_mounts_have_readonly_names() {
 #   the VM, CRs dropped; empty too, so env removed on the host goes. Prints
 #   env-ok.
 # - prints runtime-found when the project's <runtime> is there.
-# - returns whether a write into the project <dir> succeeds. A real write, not
-#   `test -w`: after a mode change the guest's fstab still shows the old one.
+# - returns whether a write into the project <dir> succeeds: 0 yes, 1 no. A
+#   real write, not `test -w`: after a mode change the guest's fstab still
+#   shows the old one. 2 when the write succeeded in the VM but did not reach
+#   <dir> on this machine: the share is not mounted (sshfs died, or never
+#   mounted), and the VM writes in the bare mount point on its own disk. The
+#   guest leaves the file for this machine to find, and remove.
 _agent_vm_push_env_and_probe() {
-  local vm_name="$1" host_dir="$2" payload="$3"
-  { [ -z "$payload" ] || printf '%s\n' "$payload"; } \
+  local vm_name="$1" host_dir="$2" payload="$3" token out st=0
+  token="$$.$RANDOM$RANDOM"
+  out="$({ [ -z "$payload" ] || printf '%s\n' "$payload"; } \
     | limactl shell "$vm_name" sh -c '
         (umask 077 && rm -f "$HOME/.agent-vm.env" && { cat; [ -z "$2" ] || [ ! -f "$2" ] || awk "{ sub(/\r\$/, \"\"); print }" "$2"; } > "$HOME/.agent-vm.env") && echo env-ok
         [ -z "$3" ] || [ ! -f "$3" ] || echo runtime-found
-        p="$1/.agent-vm-write-probe.$$"; touch "$p" 2>/dev/null || exit 1; rm -f "$p"' \
-      sh "$host_dir" "${4:-}" "${5:-}" 2>/dev/null
+        touch "$1/.agent-vm-write-probe.$4" 2>/dev/null || exit 1; echo probe-written' \
+      sh "$host_dir" "${4:-}" "${5:-}" "$token" 2>/dev/null)" || st=$?
+  printf '%s\n' "$out"
+  [[ "$st" == 0 ]] || return 1
+  [[ "$out" == *probe-written* ]] || return 0
+  if [[ -e "$host_dir/.agent-vm-write-probe.$token" ]]; then
+    rm -f "$host_dir/.agent-vm-write-probe.$token"
+    return 0
+  fi
+  return 2
 }
 
 # Are <vm>'s shares ones whose read-only flag is enforced outside the guest?
@@ -310,7 +418,8 @@ _agent_vm_mount_is_host_enforced() {
     # The record says agent-vm gave it readonlyNames, and the Lima installed
     # now serves them: a stock limactl started by hand would not.
     ?*" reverse-sshfs")
-      _agent_vm_mounts_protect_git "$1" && _agent_vm_lima_protects_git && return 0
+      _agent_vm_mounts_protect_git "$1" && _agent_vm_lima_protects_git \
+        && _agent_vm_live_shares_protected "$1" && return 0
       return 1 ;;
     *) return 2 ;;
   esac

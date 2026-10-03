@@ -4,8 +4,9 @@
 
 ### Added
 
-- `agent-vm code`: VS Code (code-server) served from the VM and opened in
-  the browser, until Ctrl-C. Opt-in at setup: `--preinstall=code-server`
+- `agent-vm code`: VS Code (code-server) served from the VM, until Ctrl-C.
+  Its address and password are printed in a box, for you to open in the
+  browser. Opt-in at setup: `--preinstall=code-server`
   for the editor alone, `code-claude`, `code-codex` and `code-vibe` for it
   with that agent's extension, each starting with no permission prompts.
   The wizard asks about the editor after the agents, then whether the
@@ -23,12 +24,46 @@
   per port, so at `127.0.0.1` a page served by any VM would get the session
   of every editor, which logs into it. Safari may not resolve `*.localhost`:
   then `127.0.0.1` in a private window kept for the editor. code-server's
-  port proxy is off.
+  port proxy is off: links to `localhost:<port>` open at that port on your
+  machine, where Lima forwards it. Claude Code's login pages open without the editor's
+  link prompt; other links still ask.
+- With code-server picked in the wizard, the base gets 4 GB of memory
+  instead of 3, unless `--memory` says otherwise.
 
 ### Changed
 
 - A command that is not in the VM (`agent-vm run foo`, or an agent not
   installed) says so, with status 127, instead of `env`'s error.
+- The protected shares turn sshfs's cache off: with it, a file the host
+  changed showed as it was for up to 20 seconds, and an agent writing back
+  what it read undid the change. Existing VMs get it on their next start
+  from stopped.
+- A project share that is no longer mounted (sshfs died) is caught: the
+  write probe now checks that its file reached the host. The VM is restarted
+  with its shares, with a warning that what it wrote meanwhile is on its own
+  disk.
+
+### Security
+
+- The check for a Lima with `sshfs.readonlyNames` no longer depends on the
+  mount type: with `mountType: reverse-sshfs` in Lima's
+  `_config/override.yaml`, a Lima that has it was taken for one that does
+  not.
+- A VM recorded as protected is checked against the shares Lima has for it:
+  a share without the read-only names, set by hand or by Lima's `_config`,
+  makes it unprotected, and a stopped VM that keeps one is not started. A
+  running VM served by another `limactl` than the one on `PATH` (a stock
+  Lima started it) is not taken as protected either.
+- Hooks reached through symlinks: `.git/hooks` or `core.hooksPath` linked to
+  a folder of the project makes that folder read-only too, and a hook that
+  is a link to a file of the project is a risk to accept.
+- Repositories in writable `~/.agent-vm/volumes` get the same checks as the
+  project's: their hooks folders join the read-only names, and their config
+  naming commands in them is a risk to accept.
+- A `.git` or `.hg`, or a folder inside one, is refused as a project: the
+  read-only names apply below a share's root only. A volume is refused when
+  it would be refused as a project (agent-vm's state, Lima's, the home
+  directory), or when its destination covers the project.
 
 ## 0.2.0
 

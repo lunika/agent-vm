@@ -113,10 +113,12 @@ STUB
 chmod +x "$SB/localvm/limactl"
 printf 'B=2\r\nA=project\r\n' > "$PF/.agent-vm.env"
 : > "$PF/.agent-vm.runtime.sh"
-out="$(PATH="$SB/localvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "A=shared" "$PF/.agent-vm.env" "$PF/.agent-vm.runtime.sh")"
+out="$(PATH="$SB/localvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "A=shared" "$PF/.agent-vm.env" "$PF/.agent-vm.runtime.sh"; echo "rc=$?")"
 check "the VM writes the shared payload, then the project's file, without CRs" \
   "$(od -c < "$GH/.agent-vm.env" | grep -c '\\r') $(tr '\n' ' ' < "$GH/.agent-vm.env")" "0 A=shared B=2 A=project "
-check "and says it did, and that the runtime is there" "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok runtime-found"
+check "and says it did, that the runtime is there, and that its write reached the project" \
+  "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok runtime-found probe-written rc=0"
+check "the write probe leaves no file in the project" "$(ls -A "$PF" | grep -c agent-vm-write-probe)" "0"
 if _agent_vm_on_windows; then
   printf '  skip the guest env file is private (permission bits are emulated on Windows)\n'
 else
@@ -124,7 +126,22 @@ else
 fi
 rm -f "$PF/.agent-vm.runtime.sh"
 out="$(PATH="$SB/localvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "" "$PF/.agent-vm.env" "$PF/.agent-vm.runtime.sh")"
-check "no runtime there: not found" "$out" "env-ok"
+check "no runtime there: not found" "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok probe-written"
+# A write that stays in the VM: the share is not mounted (a guest whose
+# project path is a directory of its own). `limactl shell <vm> sh -c <script>
+# sh <dir> ...`: the script runs on that other directory.
+mkdir -p "$SB/guest-only" "$SB/lostvm"
+cat > "$SB/lostvm/limactl" <<STUB
+#!/usr/bin/env bash
+[ "\$1" = shell ] || exit 0
+script="\$5"
+shift 7
+HOME="$GH" exec sh -c "\$script" sh "$SB/guest-only" "\$@"
+STUB
+chmod +x "$SB/lostvm/limactl"
+out="$(PATH="$SB/lostvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "" </dev/null; echo "rc=$?")"
+case "$out" in *probe-written*"rc=2") pass "a write that does not reach the project: the share is not mounted" ;; *) fail "lost share: $out" ;; esac
+rm -rf "$SB/guest-only" "$SB/lostvm"
 if command -v zsh >/dev/null 2>&1; then
   printf '#!/usr/bin/env bash\r\necho "ran:${BASH_VERSION:+bash}" > "$HOME/rt-out"\r\n' > "$PF/.agent-vm.runtime.sh"
   PATH="$SB/localvm:$PATH" _agent_vm_run_project_runtime vm "$PF" "$PF/.agent-vm.runtime.sh" >/dev/null 2>&1

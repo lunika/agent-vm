@@ -122,7 +122,7 @@ _agent_vm_ask_code_extensions() {
 
 _agent_vm_setup() {
   local disk=10
-  local memory=3
+  local memory=3 memory_seen=""
   local cpus=1
   local preinstall=""
   local preinstall_seen=""
@@ -151,7 +151,7 @@ _agent_vm_setup() {
       local opt="${vm_opts[*]-}"
       case "$opt" in
         "--disk "*)   disk="${opt#--disk }" ;;
-        "--memory "*) memory="${opt#--memory }" ;;
+        "--memory "*) memory="${opt#--memory }"; memory_seen=1 ;;
         "--cpus "*)   cpus="${opt#--cpus }" ;;
         *)
           echo "Unknown option: ${1%%=*}" >&2
@@ -175,7 +175,7 @@ the wizard is skipped automatically and the default set is installed.
 
 Options:
   --disk GB           VM disk size (default: 10)
-  --memory GB         VM memory (default: 3)
+  --memory GB         VM memory (default: 3, 4 with code-server in the wizard)
   --cpus N            Number of CPUs (default: 1)
   --preinstall=LIST   Comma-separated list of tools to preinstall in the base
                       VM image (skips the wizard). Anything not listed is
@@ -427,6 +427,11 @@ EOF
       install_ruby=$(_agent_vm_ask_yn "Ruby" N)
       install_rust=$(_agent_vm_ask_yn "Rust" N)
       install_golang=$(_agent_vm_ask_yn "Go" N)
+    fi
+
+    # The editor needs more memory than the agents alone. --memory wins.
+    if [[ "$install_code_server" == 1 && -z "$memory_seen" ]]; then
+      memory=4
     fi
 
     # Resources second, the same way, accepted in one go or not. Current

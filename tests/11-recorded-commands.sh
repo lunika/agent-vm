@@ -10,7 +10,8 @@ section "commands against a recording limactl"
 # would. AGENT_VM_TEST_STOP_FAIL makes `stop` leave it running.
 # AGENT_VM_TEST_SSHFS_FAIL fails the sshfs install of a 0.1.0 VM.
 # AGENT_VM_TEST_RUNTIME_FOUND makes the probe find the project's runtime
-# script. What is piped into the env push goes to AGENT_VM_TEST_STDIN.
+# script. AGENT_VM_TEST_PROBE_LOST makes its write succeed in the VM without
+# reaching the project, as when the share is not mounted. What is piped into the env push goes to AGENT_VM_TEST_STDIN.
 # `validate` answers like stock Lima 2.2 does to readonlyNames, or, while the
 # file $PROTECTS exists, like a Lima that has it (both messages copied from
 # the real binaries). AGENT_VM_TEST_VALIDATE_SILENT makes it accept the file
@@ -43,6 +44,17 @@ case "$1" in
         listed && echo "$AGENT_VM_TEST_VM ${AGENT_VM_TEST_SSH_PORT:-0}" ;;
       *"{{.Config.SSH.LocalPort}}"*) listed && echo "${AGENT_VM_TEST_SSH_PORT:-0}" ;;
       *"{{.SSHConfigFile}}"*) listed && echo "/lima/$AGENT_VM_TEST_VM/ssh.config" ;;
+      # Lima's config for the VM: the shares agent-vm last set, as Lima prints
+      # them, unless AGENT_VM_TEST_LIVE_UNPROTECTED adds one set by hand.
+      *"{{json .Config.Mounts}}"*)
+        r="$HOME/.agent-vm/.agent-vm-mounts-$AGENT_VM_TEST_VM"
+        if [ -f "$r" ] && grep -q readonlyNames "$r"; then
+          m="$(tr -d ' ' < "$r")"
+          [ -z "${AGENT_VM_TEST_LIVE_UNPROTECTED:-}" ] || m="${m%]},{\"location\":\"/elsewhere\",\"writable\":true}]"
+          echo "reverse-sshfs $m"
+        else
+          echo "${AGENT_VM_TEST_MOUNTTYPE:-virtiofs} [{\"location\":\"/x\",\"writable\":true}]"
+        fi ;;
       *"{{.VMType}}"*) echo "${AGENT_VM_TEST_VMTYPE:-vz} ${AGENT_VM_TEST_MOUNTTYPE:-virtiofs}" ;;
       *"{{.CPUs}}"*"{{.Disk}}"*) listed && echo "$AGENT_VM_TEST_VM|1|3221225472|10737418240" ;;
       *"{{.Status}}|"*) listed && echo "$AGENT_VM_TEST_VM|Running|1|3221225472" ;;
@@ -67,7 +79,8 @@ case "$1" in
           [ -n "${AGENT_VM_TEST_ENV_FAIL:-}" ] || echo env-ok
           [ -z "${AGENT_VM_TEST_RUNTIME_FOUND:-}" ] || echo runtime-found ;;
         esac
-        [ -z "${AGENT_VM_TEST_RO:-}" ] || exit 1 ;;
+        [ -z "${AGENT_VM_TEST_RO:-}" ] || exit 1
+        [ -z "${AGENT_VM_TEST_PROBE_LOST:-}" ] || echo probe-written ;;
       *"exec "*" -s"*) cat >> "${AGENT_VM_TEST_STDIN:-/dev/null}" ;;
       # The editor's prep (lib/code.sh): AGENT_VM_TEST_CODE_PREP is its answer.
       *"agent-vm-code "*)

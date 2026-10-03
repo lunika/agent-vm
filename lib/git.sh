@@ -25,19 +25,21 @@ AGENT_VM_LIMA_ISSUE="https://github.com/lima-vm/lima/issues/5529"
 
 # Does this Lima enforce sshfs.readonlyNames? 0 yes, 1 no, 2 cannot tell.
 # Stock Lima accepts the field and ignores it, with a mere warning, so support
-# is probed, never assumed: `limactl validate` on a config pairing it with
-# virtiofs, which a Lima that knows the field rejects, naming it. One that
-# does not know it warns about an "unknown field". Any other answer (no
-# limactl, a failure that names neither, a Lima that accepts the file without
-# a word) is "cannot tell", never "no": callers must not drop the protection
-# of a VM on an answer they could not read.
+# is probed, never assumed: `limactl validate` on a config giving it a name
+# with a slash, which a Lima that knows the field rejects, naming it, whatever
+# mount type Lima's _config/override.yaml imposes (with another than
+# reverse-sshfs, it rejects that too). One that does not know it warns about
+# an "unknown field". Any other answer (no limactl, a failure that names
+# neither, a Lima that accepts the file without a word) is "cannot tell",
+# never "no": callers must not drop the protection of a VM on an answer they
+# could not read.
 #
 # Not cached: agent-vm is also a shell function, where a cached answer would
 # outlive a Lima upgrade.
 _agent_vm_lima_protects_git() {
   local dir out accepted=""
   dir="$(mktemp -d 2>/dev/null)" || return 2
-  printf 'images: [{location: "/"}]\nmountType: virtiofs\nmounts: [{location: "%s", sshfs: {sftpDriver: builtin, readonlyNames: [.git]}}]\n' \
+  printf 'images: [{location: "/"}]\nmountType: reverse-sshfs\nmounts: [{location: "%s", sshfs: {sftpDriver: builtin, readonlyNames: [a/b]}}]\n' \
     "$(_agent_vm_host_path "$dir")" > "$dir/probe.yaml"
   out="$(limactl validate "$(_agent_vm_host_path "$dir/probe.yaml")" 2>&1)" && accepted=1
   rm -rf "$dir"
@@ -151,20 +153,56 @@ _agent_vm_project_repos() {
 # names it: lib/x/.githooks is .githooks), or the same again. Fails otherwise,
 # or when git cannot tell. `--git-path` without --path-format (git 2.31)
 # answers relative to <repo>.
+#
+# The folder as named, and as it is on disk when a symlink takes it elsewhere
+# (.git/hooks or a core.hooksPath linked to scripts/hooks): git runs what is
+# in the folder the link points to. A line for each that needs a name.
 _agent_vm_repo_hooks() {
-  local repo="$1" proj="$2" base top top_rel hooks rel in_repo
+  local repo="$1" proj="$2" base top top_rel hooks phys h rel in_repo found=""
   base="$(_agent_vm_git_spelling "$repo")" || return 1
-  hooks="$(_agent_vm_git_untrusted -C "$repo" rev-parse --git-path hooks 2>/dev/null)" || return 1
+  hooks="$(_agent_vm_repo_hooks_dir "$repo")" || return 1
+  phys="$(_agent_vm_git_spelling "$hooks" 2>/dev/null)" || phys=""
+  [[ "$phys" != "$hooks" ]] || phys=""
+  top="$(_agent_vm_git_untrusted -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || top=""
+  for h in "$hooks" ${phys:+"$phys"}; do
+    rel="$(_agent_vm_rel_in "$h" "$proj")" || continue
+    [[ "$rel" == . ]] || ! _agent_vm_under_readonly_name "$rel" || continue
+    in_repo="$rel"
+    if [[ -n "$top" ]] && top_rel="$(_agent_vm_rel_in "$top" "$proj")" && [[ "$top_rel" != . ]]; then
+      in_repo="$(_agent_vm_rel_in "$h" "$top")" || in_repo="$rel"
+    fi
+    printf '%s\t%s\n' "$rel" "$in_repo"
+    found=1
+  done
+  [[ -n "$found" ]]
+}
+
+# The hooks folder of the repository at <repo>, absolute, in git's spelling,
+# as git names it (symlinks not resolved). Fails when git cannot tell.
+_agent_vm_repo_hooks_dir() {
+  local base hooks
+  base="$(_agent_vm_git_spelling "$1")" || return 1
+  hooks="$(_agent_vm_git_untrusted -C "$1" rev-parse --git-path hooks 2>/dev/null)" || return 1
   [[ -n "$hooks" && "$hooks" != *$'\n'* && "$hooks" != *$'\t'* ]] || return 1
-  hooks="$(_agent_vm_git_abs "$hooks" "$base")"
-  rel="$(_agent_vm_rel_in "$hooks" "$proj")" || return 1
-  [[ "$rel" == . ]] || ! _agent_vm_under_readonly_name "$rel" || return 1
-  in_repo="$rel"
-  if top="$(_agent_vm_git_untrusted -C "$repo" rev-parse --show-toplevel 2>/dev/null)" \
-     && top_rel="$(_agent_vm_rel_in "$top" "$proj")" && [[ "$top_rel" != . ]]; then
-    in_repo="$(_agent_vm_rel_in "$hooks" "$top")" || in_repo="$rel"
-  fi
-  printf '%s\t%s\n' "$rel" "$in_repo"
+  _agent_vm_git_abs "$hooks" "$base"
+}
+
+# <file> with every symlink resolved, the last component included, in git's
+# spelling. Fails when it does not resolve (a dangling link, a loop).
+_agent_vm_physical_file() {
+  local f="$1" t n=0 d
+  while [[ -L "$f" ]]; do
+    n=$((n + 1))
+    [[ "$n" -le 40 ]] || return 1
+    t="$(readlink "$f")" || return 1
+    case "$t" in
+      /*) f="$t" ;;
+      *) f="$(dirname "$f")/$t" ;;
+    esac
+  done
+  [[ -e "$f" ]] || return 1
+  d="$(_agent_vm_git_spelling "$(dirname "$f")")" || return 1
+  printf '%s/%s\n' "${d%/}" "$(basename "$f")"
 }
 
 # Every hooks folder of the project <dir>'s repositories that is in the
@@ -176,6 +214,21 @@ _agent_vm_project_hooks() {
   _agent_vm_project_repos "$dir" | while IFS= read -r repo; do
     _agent_vm_repo_hooks "$repo" "$proj"
   done | awk '!seen[$0]++'
+}
+
+# The same for the project <dir> and the writable volumes it gets (see
+# _agent_vm_rw_volume_dirs): their names are read-only on every share, and
+# git on this machine runs the hooks of a repository in a volume as much. A
+# volume's folder is named by its path.
+_agent_vm_share_hooks() {
+  local v rel in_repo
+  _agent_vm_project_hooks "$1"
+  while IFS= read -r v; do
+    [[ -n "$v" ]] || continue
+    while IFS=$'\t' read -r rel in_repo; do
+      [[ -n "$rel" ]] && printf '%s\t%s\n' "${v%/}/$rel" "$in_repo"
+    done <<< "$(_agent_vm_project_hooks "$v")"
+  done <<< "$(_agent_vm_rw_volume_dirs "$1")"
 }
 
 # The name that keeps the hooks folder <rel> read-only: its first component,
@@ -207,7 +260,7 @@ _agent_vm_readonly_names() {
   while IFS=$'\t' read -r rel in_repo; do
     [[ -n "$rel" ]] || continue
     name="$(_agent_vm_hooks_name "$in_repo")" && names+=("$name")
-  done <<< "$(_agent_vm_project_hooks "$1")"
+  done <<< "$(_agent_vm_share_hooks "$1")"
   _agent_vm_names_json ${names[@]+"${names[@]}"}
 }
 
@@ -235,7 +288,7 @@ _agent_vm_hooks_note() {
 # `git config --list` prints them) with a path in their value: a start runs
 # this, and a fork per line would show.
 _agent_vm_repo_config_risks() {
-  local repo="$1" proj="$2" base top kind a b w rel
+  local repo="$1" proj="$2" base top kind a b w rel hooks f p
   base="$(_agent_vm_git_spelling "$repo")" || return 0
   top="$(_agent_vm_git_untrusted -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || return 0
   _agent_vm_git_untrusted -C "$repo" config --list --show-origin --includes 2>/dev/null \
@@ -285,6 +338,16 @@ _agent_vm_repo_config_risks() {
               break
             done
       done
+  # A hook that is a symlink to a file of the project: git runs that file,
+  # which no name keeps read-only, from a hooks folder that is.
+  hooks="$(_agent_vm_repo_hooks_dir "$repo")" || return 0
+  for f in "$hooks"/*; do
+    [[ -L "$f" && "$f" != *.sample ]] || continue
+    p="$(_agent_vm_physical_file "$f")" || continue
+    rel="$(_agent_vm_rel_in "$p" "$proj")" || continue
+    _agent_vm_under_readonly_name "$rel" && continue
+    printf 'hook %s runs %s\n' "${f##*/}" "$rel"
+  done
 }
 
 # The same for every repository of the project <dir>, each line once.
@@ -294,6 +357,19 @@ _agent_vm_project_config_risks() {
   _agent_vm_project_repos "$dir" | while IFS= read -r repo; do
     _agent_vm_repo_config_risks "$repo" "$proj"
   done | awk '!seen[$0]++'
+}
+
+# The same for the project <dir> and its writable volumes, a volume's lines
+# after its path.
+_agent_vm_share_config_risks() {
+  local v line
+  _agent_vm_project_config_risks "$1"
+  while IFS= read -r v; do
+    [[ -n "$v" ]] || continue
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && printf '%s: %s\n' "$v" "$line"
+    done <<< "$(_agent_vm_project_config_risks "$v")"
+  done <<< "$(_agent_vm_rw_volume_dirs "$1")"
 }
 
 # What a Lima without readonlyNames exposes when the shares are reverse-sshfs

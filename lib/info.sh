@@ -181,8 +181,8 @@ _agent_vm_info() {
         questions="${questions:+$questions,}hooks"
         break
       fi
-    done <<< "$(_agent_vm_project_hooks "$dir")"
-    [[ -z "$(_agent_vm_project_config_risks "$dir")" ]] || questions="${questions:+$questions,}git-config"
+    done <<< "$(_agent_vm_share_hooks "$dir")"
+    [[ -z "$(_agent_vm_share_config_risks "$dir")" ]] || questions="${questions:+$questions,}git-config"
   fi
   case "$(_agent_vm_bare_repo_state)" in
     unset|old) questions="${questions:+$questions,}bare-repo" ;;

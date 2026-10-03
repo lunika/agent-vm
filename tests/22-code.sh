@@ -21,21 +21,26 @@ if _agent_vm_host_port_open "$first"; then
   printf '  skip code launch tests (port %s is taken on this machine)\n' "$first"
 else
   out="$(rec code)"
-  rec_has "agent-vm code-server --config /home/u/.config/code-server/agent-vm-lima-x.yaml --bind-addr 127.0.0.1:$first --cookie-suffix $PV" \
+  rec_has "agent-vm VSCODE_PROXY_URI=http://localhost:{{port}}/ code-server --config /home/u/.config/code-server/agent-vm-lima-x.yaml --bind-addr 127.0.0.1:$first --cookie-suffix $PV" \
     && pass "code-server on the VM's loopback, the VM's own config and cookie" \
     || fail "code: $(grep 'code-server --config' "$REC")"
+  rec_has "--disable-getting-started-override --link-protection-trusted-domains https://claude.com/cai/oauth --link-protection-trusted-domains https://platform.claude.com/oauth --vscode-option" \
+    && pass "Claude Code's login pages are trusted, by path" || fail "trusted domains: $(grep 'code-server' "$REC")"
   rec_has "--disable-telemetry --disable-update-check --disable-workspace-trust --disable-proxy" \
     && pass "no telemetry, update check or port proxy" || fail "code flags: $(grep 'code-server --config' "$REC")"
   rec_has "--vscode-option disable-experiments --vscode-option disable-extension=GitHub.copilot-chat $PROJ" \
     && pass "no experiments, Copilot never loaded, and the project opened" || fail "code flags: $(grep 'code-server --config' "$REC")"
   case "$out" in
-    *"Editor: http://$PV.localhost:$first/"*"Password: 0123456789abcdef0123456789abcdef"*)
-      pass "the VM's own host name, and the password" ;;
+    *"+- VS Code"*"|   Address:   http://$PV.localhost:$first/"*"|   Password:  0123456789abcdef0123456789abcdef"*"Ctrl-C stops the"*)
+      pass "the VM's own host name, and the password, in a box" ;;
     *) fail "code output: $out" ;;
   esac
   check "the Safari fallback, on macOS only" \
-    "$(uname() { echo Linux; }; _agent_vm_code_say u 20000 pw | grep -c 127.0.0.1; uname() { echo Darwin; }; _agent_vm_code_say u 20000 pw | grep -c 'http://127.0.0.1:20000/')" \
+    "$(uname() { echo Linux; }; _agent_vm_code_say u 20000 pw 2>&1 | grep -c 127.0.0.1; uname() { echo Darwin; }; _agent_vm_code_say u 20000 pw 2>&1 | grep -c 'http://127.0.0.1:20000/')" \
     "$(printf '0\n1')"
+  # The user opens it: nothing is started on this machine.
+  grep -q 'xdg-open\|open "\$url"\|start "\$url"' "$AGENT_VM_SCRIPT_DIR/lib/code.sh" \
+    && fail "the browser is opened" || pass "the browser is not opened"
 
   AGENT_VM_TEST_CODE_PREP="config=/c.yaml\npassword=pw\nlistening=$first\n" rec code >/dev/null
   rec_has "--bind-addr 127.0.0.1:$((first + 1))" \
@@ -45,7 +50,7 @@ else
   rec_has "code-server --config" && fail "a second editor was started" \
     || pass "an editor already running is not started again"
   case "$out" in
-    *"already runs"*"http://$PV.localhost:$first/"*"Password: pw"*) pass "and its address is given" ;;
+    *"Address:   http://$PV.localhost:$first/"*"Password:  pw"*"already runs"*) pass "and its address is given" ;;
     *) fail "running: $out" ;;
   esac
 fi

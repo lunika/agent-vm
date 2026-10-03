@@ -29,6 +29,7 @@ cat > "$SB/wizlima/limactl" <<STUB
 case "\$1" in
   shell) cat > "$SB/wizard.stdin" ;;
   list) [ "\$2" = -q ] && echo agent-vm-base ;;
+  create) echo "\$*" > "$SB/wizard.create" ;;
 esac
 exit 0
 STUB
@@ -47,6 +48,31 @@ chmod +x "$SB/wizlima/limactl"
 check "wizard defaults: Ruby, Rust, Go, Pi and Playwright MCP off; Claude on" \
   "$(grep -E '^export AGENT_VM_INSTALL_(RUBY|RUST|GOLANG|PI|MCP_PLAYWRIGHT|CLAUDE)=' "$SB/wizard.stdin" 2>/dev/null | cut -d_ -f4- | tr '\n' ' ')" \
   "RUBY=0 RUST=0 GOLANG=0 CLAUDE=1 PI=0 MCP_PLAYWRIGHT=0 "
+
+section "setup wizard: 4 GB of memory with code-server"
+# CODE=1 answers yes to code-server. The host is big enough not to clamp.
+wiz_memory() {
+  rm -f "$SB/wizard.create"
+  ( PATH="$SB/wizlima:$PATH"; AGENT_VM_STATE_DIR="$SB/wizstate"
+    _agent_vm_have_tty() { return 0; }
+    _agent_vm_host_mem_gib() { echo 64; }
+    _agent_vm_ask_yn() {
+      case "$1" in
+        "Use this default") echo "${DEFAULT_SOFTWARE:-0}" ;;
+        "Use these defaults") echo 1 ;;
+        code-server*) echo "${CODE:-0}" ;;
+        *) case "$2" in [Yy]) echo 1 ;; *) echo 0 ;; esac ;;
+      esac
+    }
+    _agent_vm_ask_choice() { echo 3; }
+    _agent_vm_offer_git_protection() { :; }
+    _agent_vm_setup "$@" ) >/dev/null 2>&1
+  grep -o -- '--memory=[0-9]*' "$SB/wizard.create" 2>/dev/null
+}
+check "code-server picked: 4 GB" "$(CODE=1 wiz_memory)" "--memory=4"
+check "code-server not picked: 3 GB" "$(CODE=0 wiz_memory)" "--memory=3"
+check "default software (no code-server): 3 GB" "$(DEFAULT_SOFTWARE=1 wiz_memory)" "--memory=3"
+check "code-server picked, --memory 2 kept" "$(CODE=1 wiz_memory --memory 2)" "--memory=2"
 
 section "release.sh"
 REL="$SELF_DIR/release.sh"

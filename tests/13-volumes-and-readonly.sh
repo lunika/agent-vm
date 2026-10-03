@@ -167,6 +167,16 @@ case "$out" in *"Project mount is not writable; repairing"*) pass "a writable VM
 # project's env file or runtime: the repaired VM gets them pushed again.
 check "after a repair, the env is pushed again, with the project's files" \
   "$(grep -c 'rm -f "$HOME/.agent-vm.env"' "$REC") $(grep -c "^shell $PV sh -c" "$REC")" "2 2"
+# A share that is gone: the VM writes in the bare mount point on its own
+# disk, which a write probe in the VM alone takes for a writable project.
+out="$(AGENT_VM_TEST_PROBE_LOST=1 rec run true; echo "rc=$?")"
+case "$out" in
+  *"project share is not mounted in VM"*"on the VM's own disk"*"Project share is not mounted; repairing"*) pass "a share that is gone: said, and repaired" ;;
+  *) fail "share gone: $out" ;;
+esac
+rec_has "stop $PV" && rec_has "edit $PV" && rec_has "start $PV" && pass "and the VM is stopped, its shares set again, started" \
+  || fail "share gone, not repaired: $(cat "$REC")"
+case "$out" in *"the project share did not mount"*"rc=1") pass "still gone after the repair: an error" ;; *) fail "share still gone: $out" ;; esac
 rm -f "$REC_MOUNTS"
 ro_run
 rec_has "edit $PV --set del(.mountType) | .mounts" && pass "no record (an older VM): remounted to be sure" \
@@ -261,3 +271,26 @@ case "$(_agent_vm_unsafe_project "$HOME/proj-under-home" 2>/dev/null || echo non
   none) pass "a project inside the home directory is fine" ;;
   *) fail "a project inside the home directory was refused" ;;
 esac
+# The read-only names apply below a share's root: a .git shared as the
+# project would be writable whole.
+mkdir -p "$PROJ/.git/hooks" "$PROJ/sub.git" "$PROJ/.Hg"
+check "a .git"                      "$(refused "$PROJ/.git")" "refused"
+check "a folder inside a .git"      "$(refused "$PROJ/.git/hooks")" "refused"
+check "a .hg, whatever the case"    "$(refused "$PROJ/.Hg")" "refused"
+case "$(_agent_vm_unsafe_project "$PROJ/sub.git" 2>/dev/null || echo none)" in
+  none) pass "a name ending in .git is fine" ;;
+  *) fail "sub.git was refused" ;;
+esac
+rm -rf "$PROJ/.git/hooks" "$PROJ/sub.git" "$PROJ/.Hg"
+rmdir "$PROJ/.git" 2>/dev/null
+
+# Nor as volumes: agent-vm's state (the VM would add a share for its next
+# start), or a destination covering the project.
+mkdir -p "$SB/vol-ok"
+printf '%s:/mnt/s:rw\n%s:%s:rw\n%s:/mnt/ok:rw\n' "$HOME/.agent-vm" "$SB/vol-ok" "$(dirname "$PROJ")" "$SB/vol-ok" > "$HOME/.agent-vm/volumes"
+vols_err="$(_agent_vm_build_mounts_json agent-vm-t "$PROJ" 2>&1 >/dev/null)"
+vols="$(_agent_vm_build_mounts_json agent-vm-t "$PROJ" 2>/dev/null)"
+case "$vols_err" in *"'$HOME/.agent-vm' (from ~/.agent-vm/volumes) is, or contains, agent-vm's state"*) pass "volumes: agent-vm's state is refused" ;; *) fail "volumes: state: $vols_err" ;; esac
+case "$vols_err" in *"Mount destination '$(dirname "$PROJ")' (from ~/.agent-vm/volumes) would cover the project"*) pass "volumes: a destination above the project is refused" ;; *) fail "volumes: cover: $vols_err" ;; esac
+check "volumes: only the sound entry is mounted" "$(printf '%s' "$vols" | grep -o '"mountPoint"' | wc -l | tr -d ' ')" "2"
+rm -rf "$SB/vol-ok" "$HOME/.agent-vm/volumes"

@@ -166,11 +166,11 @@ _agent_vm_start_checks() {
       fi
       hooks_names+=("$hooks_name")
       hooks_notes="$hooks_notes$(_agent_vm_hooks_note "$hooks_rel" "$hooks_name")"$'\n'
-    done <<< "$(_agent_vm_project_hooks "$host_dir")"
+    done <<< "$(_agent_vm_share_hooks "$host_dir")"
     ro_names="$(_agent_vm_names_json ${hooks_names[@]+"${hooks_names[@]}"})"
 
     local git_risks=""
-    [[ -n "$rdonly" ]] || git_risks="$(_agent_vm_project_config_risks "$host_dir")"
+    [[ -n "$rdonly" ]] || git_risks="$(_agent_vm_share_config_risks "$host_dir")"
     if [[ -n "$git_risks" ]]; then
       echo "Warning: git on this machine uses these, and the VM can write them:" >&2
       printf '%s\n' "$git_risks" | sed 's/^/  /' >&2
@@ -245,12 +245,19 @@ _agent_vm_apply_resources() {
 }
 
 # The env push and the write probe (see _agent_vm_push_env_and_probe), with
-# the caller's vm_name, host_dir, env_payload, guest_env and guest_runtime,
-# into its probe_out and is_writable.
+# the caller's vm_name, host_dir, env_payload, guest_env, guest_runtime and
+# scratch, into its probe_out and is_writable: true, false, or lost when the
+# share is not mounted. A scratch VM works on its own disk: nothing reaches
+# this machine there, by design.
 _agent_vm_push_and_probe() {
-  is_writable="false"
+  local st=0
   probe_out="$(_agent_vm_push_env_and_probe "$vm_name" "$host_dir" "$env_payload" \
-    "$guest_env" "$guest_runtime")" && is_writable="true"
+    "$guest_env" "$guest_runtime")" || st=$?
+  case "$st" in
+    0) is_writable="true" ;;
+    2) if [[ -n "$scratch" ]]; then is_writable="true"; else is_writable="lost"; fi ;;
+    *) is_writable="false" ;;
+  esac
   [[ "$probe_out" == *env-ok* ]] || echo "Warning: failed to push the env files into VM '$vm_name'." >&2
 }
 
@@ -420,12 +427,31 @@ _agent_vm_ensure_running() {
   # names (names_stale), the mode (mode_stale). A stopped VM is changed before
   # it boots, so nothing starting with it gets a writable window; a running
   # one keeps its shares until stopped, or is offered a restart.
-  local was_protected="" git_stale="" names_stale="" mode_stale=""
+  local was_protected="" git_stale="" names_stale="" mode_stale="" cache_stale=""
   _agent_vm_mounts_protect_git "$vm_name" && was_protected=1
+  # The record against what Lima has for the VM, for a VM that exists: a
+  # share without names set outside agent-vm makes it unprotected, whatever
+  # was recorded. Which names, the record says (names_stale below).
+  if [[ -n "$protect_git" && -n "$was_protected" && -z "$is_new_vm" ]] \
+     && ! _agent_vm_live_shares_protected "$vm_name"; then
+    was_protected=""
+  fi
+  # Running, it is served by the limactl that started it, which may not be
+  # the one checked above.
+  if [[ -n "$protect_git" && -n "$was_protected" ]] && _agent_vm_running "$vm_name" \
+     && ! _agent_vm_hostagent_is_limactl "$vm_name"; then
+    echo "Warning: VM '$vm_name' was started by another limactl than $(command -v limactl), which may not keep .git read-only." >&2
+    was_protected=""
+  fi
   [[ "$was_protected" != "$protect_git" ]] && git_stale=1
   if [[ -n "$protect_git" && -n "$was_protected" ]] \
      && ! _agent_vm_mounts_have_readonly_names "$vm_name" "$ro_names"; then
     names_stale=1
+  fi
+  # Shares from before sshfs's cache was turned off: set again before it
+  # boots, never a reason to restart it.
+  if [[ -n "$protect_git" && -n "$was_protected" ]] && ! _agent_vm_mounts_cache_off "$vm_name"; then
+    cache_stale=1
   fi
   if [[ -n "$scratch" ]]; then
     # Shares nothing, as made: nothing to bring in line.
@@ -463,7 +489,7 @@ _agent_vm_ensure_running() {
     fi
   elif [[ -n "$names_stale" && -n "$was_running" ]]; then
     :
-  elif [[ -z "$was_running" && ( -n "$git_stale" || -n "$names_stale" || -n "$mode_stale" ) ]]; then
+  elif [[ -z "$was_running" && ( -n "$git_stale" || -n "$names_stale" || -n "$mode_stale" || -n "$cache_stale" ) ]]; then
     if [[ -n "$git_stale" ]]; then
       if [[ -n "$protect_git" ]]; then
         echo "Making every .git read-only for VM '$vm_name'..."
@@ -485,6 +511,14 @@ _agent_vm_ensure_running() {
       echo "VM '$vm_name' was left read-only by --readonly; making it writable again..."
     fi
     _agent_vm_apply_shares "$vm_name" "$host_dir" "$want_writable" || return 1
+  fi
+
+  # A share agent-vm did not set, which its edit cannot remove: one from
+  # Lima's _config, added to every VM.
+  if [[ -z "$was_running" && -n "$protect_git" ]] && ! _agent_vm_live_shares_protected "$vm_name" "$ro_names"; then
+    echo "Error: Lima gives VM '$vm_name' a share without the read-only names, so the VM could write the .git in it." >&2
+    echo "  Look for 'mounts' in $(_agent_vm_lima_home)/_config/override.yaml and default.yaml, and remove them." >&2
+    return 1
   fi
 
   if [[ -z "$was_running" ]]; then
@@ -543,7 +577,10 @@ _agent_vm_ensure_running() {
     # yanking a running session out from under another terminal, in both
     # directions. The repair direction does not ask: a broken mount is
     # already unusable.
-    if [[ "$want_writable" == "true" && -n "$was_running" ]] && _agent_vm_mounts_all_readonly "$vm_name"; then
+    if [[ "$is_writable" == lost ]]; then
+      echo "Warning: the project share is not mounted in VM '$vm_name': what was written in $host_dir in the VM since then is on the VM's own disk, and hidden once the share is back." >&2
+      echo "Project share is not mounted; repairing..." >&2
+    elif [[ "$want_writable" == "true" && -n "$was_running" ]] && _agent_vm_mounts_all_readonly "$vm_name"; then
       echo "VM '$vm_name' runs read-only (--readonly). It must be restarted to make its shares writable."
       if ! _agent_vm_can_ask || [[ "$(_agent_vm_ask_yn "Stop the VM and make it writable? Sessions using it are cut." N)" != "1" ]]; then
         echo "Error: not restarted. Pass --readonly to use it as it is, or 'agent-vm stop' it first." >&2
@@ -578,7 +615,11 @@ _agent_vm_ensure_running() {
     # env file and runtime script.
     _agent_vm_push_and_probe
     if [[ "$is_writable" != "$want_writable" ]]; then
-      if [[ "$want_writable" == "true" ]]; then
+      if [[ "$is_writable" == lost ]]; then
+        echo "Error: the project share did not mount in VM '$vm_name':" >&2
+        echo "  $host_dir" >&2
+        echo "Lima's log: $(_agent_vm_lima_home)/$vm_name/ha.stderr.log" >&2
+      elif [[ "$want_writable" == "true" ]]; then
         echo "Error: project directory is still not writable inside the VM:" >&2
         echo "  $host_dir" >&2
         echo "The host mount failed to attach. Try 'agent-vm --reset <command>'" >&2

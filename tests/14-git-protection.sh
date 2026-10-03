@@ -30,6 +30,21 @@ for t in mktemp rm; do
   chmod +x "$SB/nolimactl/$t"
 done
 check "no limactl: cannot tell" "$(PATH="$SB/nolimactl" probe)" "unknown"
+# A Lima with readonlyNames whose _config/override.yaml sets mountType:
+# reverse-sshfs accepts readonlyNames with any other mount type; a name with
+# a slash it still refuses (the message copied from the real binary).
+mkdir -p "$SB/override-lima"
+cat > "$SB/override-lima/limactl" <<'STUB'
+#!/usr/bin/env bash
+f="${2:-}"
+if grep -q 'readonlyNames: \[[^]]*/' "$f" 2>/dev/null; then
+  echo 'level=fatal msg="failed to validate YAML file `probe.yaml`: field `mounts[0].sshfs.readonlyNames` must contain file names, got `a/b`"' >&2
+  exit 1
+fi
+echo 'level=info msg="`probe.yaml`: OK"' >&2
+STUB
+chmod +x "$SB/override-lima/limactl"
+check "a Lima with readonlyNames, whatever mount type its config imposes: protection" "$(PATH="$SB/override-lima:$PATH" probe)" "yes"
 check "a Lima accepting the probe without a word: cannot tell" \
   "$(AGENT_VM_TEST_VALIDATE_SILENT=1 probe)" "unknown"
 
@@ -316,6 +331,45 @@ _agent_vm_mounts_have_readonly_names "$PV" '[".git", ".hg"]' && pass "names: rec
 out="$(AGENT_VM_TEST_STOPPED=1 rec run true)"
 rec_has "edit $PV" && fail "names: edited again with nothing to change" || pass "names: nothing to change the next time"
 
+# Shares from before sshfs's cache was off: set again while stopped, never
+# a reason to restart a running VM.
+names_rec '[".git", ".hg"]'
+out="$(rec run true)"
+rec_has "edit $PV" && fail "cache: a running VM was changed" || pass "cache: a running VM is left as it is"
+rec_has "stop $PV" && fail "cache: a running VM was stopped" || pass "cache: and not stopped"
+names_rec '[".git", ".hg"]'
+AGENT_VM_TEST_STOPPED=1 rec run true >/dev/null
+rec_has "edit $PV --set .mountType = \"reverse-sshfs\" | .mounts = [{$(mnt "$PROJ"), \"writable\": true, $SSHFS_RO}]" \
+  && pass "cache: a stopped VM gets its shares with the cache off" || fail "cache: not updated: $(grep '^edit' "$REC")"
+_agent_vm_mounts_cache_off "$PV" && pass "cache: recorded" || fail "cache: record: $(cat "$REC_MOUNTS")"
+
+# A share in Lima's config without the names, set outside agent-vm (by hand,
+# or from Lima's _config): the record cannot be trusted.
+out="$(AGENT_VM_TEST_LIVE_UNPROTECTED=1 rec run true)"
+case "$out" in *"is running with .git writable"*) pass "live: a running VM with such a share is warned about" ;; *) fail "live, running: $out" ;; esac
+out="$(AGENT_VM_TEST_LIVE_UNPROTECTED=1 AGENT_VM_TEST_STOPPED=1 rec run true; echo "rc=$?")"
+case "$out" in *"a share without the read-only names"*"_config/override.yaml"*"rc=1") pass "live: a stopped VM keeping one after its edit is not started" ;; *) fail "live, stopped: $out" ;; esac
+rec_has "start $PV" && fail "live: started anyway" || pass "live: and not started"
+
+# A running VM served by another binary than the limactl on PATH (a stock
+# Lima that ignores the names): its pid file points to that process.
+if _agent_vm_on_windows; then
+  printf '  skip the limactl serving a running VM (not told on Windows)\n'
+else
+  names_rec '[".git", ".hg"]'
+  printf '%s\n' "$(cat "$REC_MOUNTS" | sed 's/"readonlyNames"/"cache": false, "readonlyNames"/')" > "$REC_MOUNTS"
+  mkdir -p "$(_agent_vm_lima_home)/$PV"
+  : > "$(_agent_vm_lima_home)/$PV/lima.yaml"
+  sleep 30 & other_pid=$!
+  echo "$other_pid" > "$(_agent_vm_lima_home)/$PV/ha.pid"
+  out="$(rec run true)"
+  case "$out" in *"was started by another limactl"*"is running with .git writable"*) pass "hostagent: a VM another limactl runs is not taken as protected" ;; *) fail "hostagent: $out" ;; esac
+  kill "$other_pid" 2>/dev/null; wait "$other_pid" 2>/dev/null
+  rm -f "$(_agent_vm_lima_home)/$PV/ha.pid" "$(_agent_vm_lima_home)/$PV/lima.yaml"
+  out="$(rec run true)"
+  case "$out" in *"another limactl"*) fail "hostagent: no pid file, warned anyway" ;; *) pass "hostagent: when it cannot tell, nothing is said" ;; esac
+fi
+
 # core.hooksPath in the project: its first component joins the names.
 if command -v git >/dev/null 2>&1; then
   # In subshells: bash 3.2 would keep git hashed for a later test that hides
@@ -385,6 +439,57 @@ if command -v git >/dev/null 2>&1; then
     && pass "hooks: a start protects the nested folder by its own name, not the project's 'lib'" \
     || fail "hooks: nested, start: $(grep '^edit' "$REC")"
   rm -rf "$PROJ/lib"
+
+  # Hooks through symlinks: git runs what the link points to.
+  if [ -n "$AGENT_VM_HAS_SYMLINKS" ]; then
+    hp .husky/_
+    mkdir -p "$PROJ/scripts/hooks"
+    ( git -C "$PROJ" config --unset core.hooksPath )
+    mv "$PROJ/.git/hooks" "$SB/hooks-saved"
+    ln -s ../scripts/hooks "$PROJ/.git/hooks"
+    check "hooks: .git/hooks linked into the project: its folder joins the names" "$(names)" '[".git", ".hg", "scripts"]'
+    rm "$PROJ/.git/hooks"
+    mv "$SB/hooks-saved" "$PROJ/.git/hooks"
+    ln -s scripts/hooks "$PROJ/.githooks"
+    hp .githooks
+    check "hooks: core.hooksPath linked elsewhere in the project: both names" "$(names)" '[".git", ".hg", ".githooks", "scripts"]'
+    ( git -C "$PROJ" config --unset core.hooksPath )
+    rm "$PROJ/.githooks"
+    printf '#!/bin/sh\n' > "$PROJ/scripts/pre-commit"
+    ln -s ../../scripts/pre-commit "$PROJ/.git/hooks/pre-commit"
+    ln -s "$SB/elsewhere-hook" "$PROJ/.git/hooks/post-commit"
+    case "$(_agent_vm_project_config_risks "$PROJ")" in
+      *"hook pre-commit runs scripts/pre-commit"*) pass "hooks: a hook linked to a file of the project is a risk" ;;
+      *) fail "hooks: linked hook: $(_agent_vm_project_config_risks "$PROJ")" ;;
+    esac
+    case "$(_agent_vm_project_config_risks "$PROJ")" in
+      *post-commit*) fail "hooks: a link out of the project counted as a risk" ;;
+      *) pass "hooks: and one linked out of it is not" ;;
+    esac
+    rm -f "$PROJ/.git/hooks/pre-commit" "$PROJ/.git/hooks/post-commit"
+    rm -rf "$PROJ/scripts"
+    hp .husky/_
+  else
+    printf '  skip hooks through symlinks (no symlinks here)\n'
+  fi
+
+  # A repository in a writable volume: git on this machine runs its hooks and
+  # config as much as the project's.
+  VREPO="$SB/vrepo"
+  mkdir -p "$VREPO"
+  ( git -C "$VREPO" init -q && git -C "$VREPO" config core.hooksPath tools/hooks \
+      && git -C "$VREPO" config core.fsmonitor ./fsmon.sh )
+  printf '%s:/mnt/vrepo:rw\n' "$VREPO" > "$HOME/.agent-vm/volumes"
+  check "volumes: a writable volume's hooks folder joins the names" "$(names)" '[".git", ".hg", ".husky", "tools"]'
+  case "$(_agent_vm_share_hooks "$PROJ")" in *"$VREPO/tools/hooks"*) pass "volumes: named by the volume's path" ;; *) fail "volumes: hooks: $(_agent_vm_share_hooks "$PROJ")" ;; esac
+  case "$(_agent_vm_share_config_risks "$PROJ")" in
+    *"$VREPO: core.fsmonitor = ./fsmon.sh"*) pass "volumes: its config naming a command in it is a risk" ;;
+    *) fail "volumes: risks: $(_agent_vm_share_config_risks "$PROJ")" ;;
+  esac
+  printf '%s:/mnt/vrepo:ro\n' "$VREPO" > "$HOME/.agent-vm/volumes"
+  check "volumes: a read-only volume adds nothing" "$(names)" '[".git", ".hg", ".husky"]'
+  [ -z "$(_agent_vm_share_config_risks "$PROJ")" ] && pass "volumes: nor risks" || fail "volumes: ro risks: $(_agent_vm_share_config_risks "$PROJ")"
+  rm -rf "$VREPO" "$HOME/.agent-vm/volumes"
 
   # A name that is not a dot-name is read-only in every folder of the
   # project, so it is asked first: yes by default, and when no one can answer.

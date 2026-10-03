@@ -28,7 +28,7 @@ esac
 
 # .git protection: Lima refuses readonlyNames unless EVERY mount uses the
 # builtin driver, so the volumes entries need it as much as the project.
-SSHFS_RO='"sshfs": {"sftpDriver": "builtin", "readonlyNames": [".git", ".hg"]}'
+SSHFS_RO='"sshfs": {"sftpDriver": "builtin", "cache": false, "readonlyNames": [".git", ".hg"]}'
 printf '%s:/mnt/v:rw\n' "$SB/extra-vol" > "$HOME/.agent-vm/volumes"
 mounts_prot="$(_agent_vm_build_mounts_json agent-vm-t "$PROJ" true 1)"
 rm -f "$HOME/.agent-vm/volumes"
@@ -58,6 +58,7 @@ mount_types() {
   cat > "$SB/bin/limactl" <<STUB
 #!/usr/bin/env bash
 [ "\$1" = shell ] && { echo 9p; exit 0; }
+case "\$*" in *"json .Config.Mounts"*) printf '%s\n' "\${MT_LIVE:-}"; exit 0 ;; esac
 [ "\$1" = list ] && { printf '%s\n' "$1"; exit 0; }
 [ "\$1" = validate ] && [ -n "\${MT_PROTECTS:-}" ] && { echo 'field mounts[*].sshfs.readonlyNames requires mountType to be reverse-sshfs' >&2; exit 1; }
 exit 1
@@ -92,7 +93,11 @@ check "unset on QEMU, no lima-version: reverse-sshfs, not" "$(LIMA_HOME="$SB/lim
 # cannot tell the servers apart: the record of the applied mounts does.
 mkdir -p "$HOME/.agent-vm"
 printf '[{"location": "%s", "writable": false, %s}]\n' "$PROJ" "$SSHFS_RO" > "$HOME/.agent-vm/.agent-vm-mounts-agent-vm-t"
-check "reverse-sshfs with readonlyNames is" "$(MT_PROTECTS=1 mount_types 'qemu reverse-sshfs')" "0"
+LIVE_OK='reverse-sshfs [{"location":"/p","writable":false,"sshfs":{"cache":false,"sftpDriver":"builtin","readonlyNames":[".git",".hg"]}}]'
+check "reverse-sshfs with readonlyNames is" "$(MT_PROTECTS=1 MT_LIVE="$LIVE_OK" mount_types 'qemu reverse-sshfs')" "0"
+# Recorded so, but Lima has a share without them, set outside agent-vm: not.
+check "recorded with readonlyNames, a share in Lima's config without them: not" \
+  "$(MT_PROTECTS=1 MT_LIVE="${LIVE_OK%]},{\"location\":\"/elsewhere\",\"writable\":true}]" mount_types 'qemu reverse-sshfs')" "1"
 # Recorded so, but served by a Lima without them (a stock limactl started it
 # since): not.
 check "recorded with readonlyNames, a Lima without them: not" "$(mount_types 'qemu reverse-sshfs')" "1"

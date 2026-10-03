@@ -185,7 +185,7 @@ export const fr: Dictionary = {
       },
       {
         title: 'Redimensionner à la volée',
-        body: 'Une nouvelle VM reprend les 10 Go de disque, 3 Go de mémoire et 1 CPU de l\'image. Passe une autre valeur et la VM est reconfigurée, après confirmation si elle tourne. Le disque ne fait que grandir. CPU et mémoire sont plafonnés à la moitié de l\'hôte, par VM.',
+        body: 'Une nouvelle VM reprend les 10 Go de disque, 3 Go de mémoire (4 avec code-server choisi dans l\'assistant) et 1 CPU de l\'image. Passe une autre valeur et la VM est reconfigurée, après confirmation si elle tourne. Le disque ne fait que grandir. CPU et mémoire sont plafonnés à la moitié de l\'hôte, par VM.',
         code: 'agent-vm --disk 50 opencode\nagent-vm --memory 16 --cpus 8 shell\nagent-vm --reset claude   # re-cloner depuis l\'image',
       },
       {
@@ -231,7 +231,7 @@ export const fr: Dictionary = {
         rows: [
           ['shell, sh', 'Ouvre un shell zsh dans la VM. `-c "…"` exécute une commande unique via un shell de connexion.'],
           ['run <cmd> [args]', 'Exécute une commande sans shell. `--tty` alloue un PTY pour les TUI.'],
-          ['code', 'Sert VS Code (code-server) depuis la VM à `http://<nom-de-vm>.localhost:<port>/` et l\'ouvre dans ton navigateur, jusqu\'à Ctrl-C. Son mot de passe est créé dans la VM à la première utilisation, puis affiché. Demande `code-server` ou un nom `code-*` au setup ([Ce qu\'il y a dans la VM](#what-is-in-the-vm)).'],
+          ['code', 'Sert VS Code (code-server) depuis la VM à `http://<nom-de-vm>.localhost:<port>/`, jusqu\'à Ctrl-C, à ouvrir dans ton navigateur. Son mot de passe est créé dans la VM à la première utilisation, puis affiché avec l\'adresse. Demande `code-server` ou un nom `code-*` au setup ([Ce qu\'il y a dans la VM](#what-is-in-the-vm)).'],
         ],
       },
       {
