@@ -307,6 +307,13 @@ check "volumes: covering the project or merged with another, whatever the spelli
   "$(printf '%s\n' "$vols_err" | grep -c 'covers the project')/$(printf '%s\n' "$vols_err" | grep -c 'as an entry before it')" "3/1"
 check "volumes: the first at a place is kept, its destination normalized" "$vols" "$SB/vol-ok|/mnt/d|ro|$SB/vol-ok:/mnt/d:ro"
 rm -rf "$SB/vol-ok" "$SB/vol-ok2" "$SB/cov" "$HOME/.agent-vm/volumes"
+# Where case is ignored, a volume holding the home directory spelled with
+# other capitals is refused all the same.
+mkdir -p "$SB/CaseVol"
+printf '%s:/mnt/c:ro\n' "$SB/CaseVol" > "$HOME/.agent-vm/volumes"
+out="$( HOME="$SB/casevol/home"; uname() { echo Darwin; }; _agent_vm_volume_entries "$PROJ" 2>&1 )"
+case "$out" in *"is, or contains, your home directory"*) pass "volumes: the home directory in other capitals, where case is ignored: refused" ;; *) fail "volumes: case: $out" ;; esac
+rm -rf "$SB/CaseVol" "$HOME/.agent-vm/volumes"
 # A repository's own folder: refused writable, where the VM would write its
 # hooks and config, not read-only.
 mkdir -p "$SB/bare.git/objects" "$SB/bare.git/refs" && : > "$SB/bare.git/HEAD"

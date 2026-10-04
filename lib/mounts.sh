@@ -92,9 +92,10 @@ _agent_vm_project_mountpoint() {
 _agent_vm_volume_entries() {
   local host_dir="$1" raw line mounts_file="$AGENT_VM_STATE_DIR/volumes" why mp proj_mp seen_mps=$'\n'
   [[ -f "$mounts_file" ]] || return 0
-  local _agent_vm_unsafe_refs _agent_vm_windows_memo=0 _agent_vm_nocase_memo=0
-  _agent_vm_on_windows && _agent_vm_windows_memo=1
-  _agent_vm_fs_nocase && _agent_vm_nocase_memo=1
+  # Empty while asked: the memos are what the two functions read first.
+  local _agent_vm_unsafe_refs _agent_vm_windows_memo="" _agent_vm_nocase_memo=""
+  _agent_vm_on_windows && _agent_vm_windows_memo=1 || _agent_vm_windows_memo=0
+  _agent_vm_fs_nocase && _agent_vm_nocase_memo=1 || _agent_vm_nocase_memo=0
   _agent_vm_unsafe_refs="$(_agent_vm_unsafe_ref_dirs)"
   proj_mp="$(_agent_vm_path_join / "$host_dir")"
   while IFS= read -r raw || [[ -n "$raw" ]]; do

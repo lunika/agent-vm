@@ -21,7 +21,7 @@ fi
 
 # Semantic version of this file. Bumped by hand on release. Integrators gate on
 # it via `agent-vm version`; a build with no `version` command predates it.
-AGENT_VM_VERSION="0.2.0"
+AGENT_VM_VERSION="0.2.1"
 
 AGENT_VM_TEMPLATE="agent-vm-base"
 # Overridable, for a test or a second install, without moving HOME (and

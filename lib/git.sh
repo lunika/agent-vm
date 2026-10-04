@@ -393,9 +393,10 @@ _agent_vm_git_scan() {
 _agent_vm_git_scan_lines() {
   local shares proj home s kind at i n=0 hooks hp top h f t in_repo name shown
   local hit_share hit_rel top_share top_rel names="$_AGENT_VM_BASE_NAMES"
-  local _agent_vm_windows_memo=0 _agent_vm_nocase_memo=0 kinds=() ats=() hookss=() tops=()
-  _agent_vm_on_windows && _agent_vm_windows_memo=1
-  _agent_vm_fs_nocase && _agent_vm_nocase_memo=1
+  # Empty while asked: the memos are what the two functions read first.
+  local _agent_vm_windows_memo="" _agent_vm_nocase_memo="" kinds=() ats=() hookss=() tops=()
+  _agent_vm_on_windows && _agent_vm_windows_memo=1 || _agent_vm_windows_memo=0
+  _agent_vm_fs_nocase && _agent_vm_nocase_memo=1 || _agent_vm_nocase_memo=0
   shares="$(_agent_vm_writable_shares "$1")"
   [[ -n "$shares" ]] || return 0
   proj="${shares%%$'\n'*}"

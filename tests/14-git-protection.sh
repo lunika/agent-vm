@@ -493,6 +493,11 @@ if command -v git >/dev/null 2>&1; then
   ( _agent_vm_fs_nocase() { return 1; }; _agent_vm_rel_in /Work/Proj/x /work/proj ) >/dev/null \
     && fail "a path in other capitals counted as inside where case matters" \
     || pass "and not where case matters"
+  # The same through a whole scan.
+  hp "$(printf '%s' "$PROJ" | tr '[:lower:]' '[:upper:]')/.husky/_"
+  check "hooks: a hooks path in other capitals is named, where case is ignored" \
+    "$( uname() { echo Darwin; }; names )" '[".git", ".hg", ".husky"]'
+  hp .husky/_
 
   # A repository below the project has hooks of its own.
   mkdir -p "$PROJ/lib/inner"
@@ -584,7 +589,7 @@ if command -v git >/dev/null 2>&1; then
       && git -C "$VREPO" config core.fsmonitor ./fsmon.sh )
   printf '%s:/mnt/vrepo:rw\n' "$VREPO" > "$HOME/.agent-vm/volumes"
   check "volumes: a writable volume's hooks folder joins the names" "$(names)" '[".git", ".hg", ".husky", "tools"]'
-  case "$(_agent_vm_share_hooks "$PROJ")" in *"$VREPO/tools/hooks"*) pass "volumes: named by the volume's path" ;; *) fail "volumes: hooks: $(_agent_vm_share_hooks "$PROJ")" ;; esac
+  case "$(_agent_vm_share_hooks "$PROJ")" in *"$(_agent_vm_git_spelling "$VREPO")/tools/hooks"*) pass "volumes: named by the volume's path" ;; *) fail "volumes: hooks: $(_agent_vm_share_hooks "$PROJ")" ;; esac
   case "$(_agent_vm_share_config_risks "$PROJ")" in
     *"core.fsmonitor = ./fsmon.sh"*) pass "volumes: its config naming a command in it is a risk" ;;
     *) fail "volumes: risks: $(_agent_vm_share_config_risks "$PROJ")" ;;
@@ -599,9 +604,11 @@ if command -v git >/dev/null 2>&1; then
   VOL="$SB/teamtools"
   mkdir -p "$VOL/hooks"
   printf '%s:/mnt/teamtools:rw\n' "$VOL" > "$HOME/.agent-vm/volumes"
-  ( git -C "$PROJ" config core.fsmonitor "$VOL/fsmon.sh" && git -C "$PROJ" config include.path "$VOL/gitconfig" )
+  # Paths as git spells them: Git Bash hands git C:/... for /c/...
+  VOLG="$(_agent_vm_git_spelling "$VOL")"
+  ( git -C "$PROJ" config core.fsmonitor "$VOLG/fsmon.sh" && git -C "$PROJ" config include.path "$VOLG/gitconfig" )
   case "$(_agent_vm_share_config_risks "$PROJ")" in
-    *"core.fsmonitor = $VOL/fsmon.sh"*"config file $VOL/gitconfig"*|*"config file $VOL/gitconfig"*"core.fsmonitor = $VOL/fsmon.sh"*)
+    *"core.fsmonitor = $VOLG/fsmon.sh"*"config file $VOLG/gitconfig"*|*"config file $VOLG/gitconfig"*"core.fsmonitor = $VOLG/fsmon.sh"*)
       pass "volumes: the project's config naming a command and a file in a volume" ;;
     *) fail "volumes: cross: $(_agent_vm_share_config_risks "$PROJ")" ;;
   esac
@@ -612,15 +619,19 @@ if command -v git >/dev/null 2>&1; then
   mkdir -p "$VOL/git"
   printf '[core]\n\tfsmonitor = %s/fsmon.sh\n' "$VOL" > "$VOL/git/config"
   case "$( XDG_CONFIG_HOME="$VOL" _agent_vm_share_config_risks "$PROJ" )" in
-    *"config file $VOL/git/config"*) pass "volumes: git's own config kept in a volume" ;;
+    *"config file $VOLG/git/config"*) pass "volumes: git's own config kept in a volume" ;;
     *) fail "volumes: global: $( XDG_CONFIG_HOME="$VOL" _agent_vm_share_config_risks "$PROJ" )" ;;
   esac
   # A volume reached through a symlink is searched all the same.
-  mkdir -p "$SB/data/code/app"
-  ln -s "$SB/data/code" "$SB/code-link"
-  ( git -C "$SB/data/code/app" init -q && git -C "$SB/data/code/app" config core.hooksPath .husky/_ )
-  printf '%s:/mnt/code:rw\n' "$SB/code-link" > "$HOME/.agent-vm/volumes"
-  case "$(_agent_vm_share_hooks "$PROJ")" in *"$SB/data/code/app/.husky/_"*) pass "volumes: a volume through a symlink is searched" ;; *) fail "volumes: symlinked: $(_agent_vm_share_hooks "$PROJ")" ;; esac
+  if [ -n "$AGENT_VM_HAS_SYMLINKS" ]; then
+    mkdir -p "$SB/data/code/app"
+    ln -s "$SB/data/code" "$SB/code-link"
+    ( git -C "$SB/data/code/app" init -q && git -C "$SB/data/code/app" config core.hooksPath .husky/_ )
+    printf '%s:/mnt/code:rw\n' "$SB/code-link" > "$HOME/.agent-vm/volumes"
+    case "$(_agent_vm_share_hooks "$PROJ")" in *"$(_agent_vm_git_spelling "$SB/data/code/app")/.husky/_"*) pass "volumes: a volume through a symlink is searched" ;; *) fail "volumes: symlinked: $(_agent_vm_share_hooks "$PROJ")" ;; esac
+  else
+    printf '  skip a volume through a symlink (no symlinks here)\n'
+  fi
   # The project inside a writable volume: each folder once, named from the
   # project.
   mkdir -p "$SB/up/app"
