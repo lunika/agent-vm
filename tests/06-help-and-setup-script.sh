@@ -240,7 +240,9 @@ else
   # a: an absolute ref, a relative one with ./ and a fragment, a local one,
   # and one to the editor's own schemas.
   echo '{"$ref":"#/definitions/x","definitions":{"x":{"$ref":"https://h.test/abs.json"},"y":{"$ref":"./rel.json#/z"},"z":{"$ref":"vscode://schemas/settings"},"w":{"properties":{"$ref":{"type":"string"}}}}}' > "$SCH/web/$(web https://h.test/s/a)"
-  echo '{"type":"object"}' > "$SCH/web/$(web https://h.test/abs.json)"
+  # abs refers to a schema that is no object: true is a valid schema.
+  echo '{"type":"object","properties":{"t":{"$ref":"https://h.test/true.json"}}}' > "$SCH/web/$(web https://h.test/abs.json)"
+  echo 'true' > "$SCH/web/$(web https://h.test/true.json)"
   echo '{"$ref":"../top.json"}' > "$SCH/web/$(web https://h.test/s/rel.json)"
   echo '{"type":"string"}' > "$SCH/web/$(web https://h.test/top.json)"
   echo '{"type":"number"}' > "$SCH/web/$(web https://www.schemastore.org/b)"
@@ -273,7 +275,7 @@ else
             code_server_schemas "$SCH/ext" "$SCH/machine/settings.json"; echo "rc=$?" ) 2>&1)"
   check "every schema named, and every one they refer to, by the URL the editor asks" \
     "$(jq -r '."json.schemas"[].url' "$SCH/machine/settings.json" 2>/dev/null | sort | tr '\n' ' ')" \
-    "https://h.test/abs.json https://h.test/s/a https://h.test/s/a/b/d.json https://h.test/s/c.json https://h.test/s/rel.json https://h.test/top.json https://json.schemastore.org/b https://json.schemastore.org/eslintrc.json https://www.schemastore.org/package "
+    "https://h.test/abs.json https://h.test/s/a https://h.test/s/a/b/d.json https://h.test/s/c.json https://h.test/s/rel.json https://h.test/top.json https://h.test/true.json https://json.schemastore.org/b https://json.schemastore.org/eslintrc.json https://www.schemastore.org/package "
   check "a level of references fetched in one call" "$(wc -l < "$SCH/calls" | tr -d ' ')" "3"
   check "each with its content" \
     "$(jq -r '."json.schemas"[] | select(.url == "https://h.test/top.json") | .schema.type' "$SCH/machine/settings.json" 2>/dev/null)" "string"

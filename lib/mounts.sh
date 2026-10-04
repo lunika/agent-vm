@@ -438,7 +438,7 @@ _agent_vm_protection_why() {
 _agent_vm_hostagent_is_limactl() {
   local pid="" exe="" run="" mine
   _agent_vm_on_windows && return 0
-  read -r pid < "$(_agent_vm_lima_home)/$1/ha.pid" 2>/dev/null
+  { read -r pid < "$(_agent_vm_lima_home)/$1/ha.pid"; } 2>/dev/null
   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
   if [[ -e "/proc/$pid/exe" ]]; then
     exe="$(readlink "/proc/$pid/exe" 2>/dev/null)"
@@ -468,7 +468,7 @@ _agent_vm_sshfs_cache_mode() {
 # by _agent_vm_apply_shares).
 _agent_vm_mounts_sshfs_current() {
   local mode=""
-  read -r mode < "$AGENT_VM_STATE_DIR/.agent-vm-sshfs-cache-$1" 2>/dev/null
+  { read -r mode < "$AGENT_VM_STATE_DIR/.agent-vm-sshfs-cache-$1"; } 2>/dev/null
   [[ "$mode" == "$(_agent_vm_sshfs_cache_mode)" ]]
 }
 

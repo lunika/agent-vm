@@ -313,23 +313,23 @@ _agent_vm_scan_risk() {
 }
 
 # The risk lines of the config of the repository <at> of kind <kind>, whose
-# work tree is <top> (see _agent_vm_git_at): its own config, or git's global
-# and system config for G. Config files in a share, included ones whether
-# they exist yet or not (git skips a missing one, and the VM can create it).
-# Settings whose command a share holds: a path in their value, relative to
-# the top of the repository, where git runs most of them (git's own config
-# has none to take them from). awk sorts the config first, so the shell only
+# work tree is <top> (see _agent_vm_git_at): every scope git reads there
+# (system, global, local, worktree), or git's global and system config alone
+# for G. Config files in a share, included ones whether they exist yet or not
+# (git skips a missing one, and the VM can create it). Settings whose command
+# a share holds: a path in their value, relative to the top of the
+# repository, where git runs most of them, a global alias included (G has no
+# repository to take them from). awk sorts the config first, so the shell only
 # sees each file once and the settings that hold a command (section and key
 # names lowercased, as `git config --list` prints them) with a path in their
 # value: a start runs this, and a fork per line would show.
 _agent_vm_scan_config() {
-  local kind="$1" at="$2" cmd_base="$3" base=/ scope=--local k a b c w shown
+  local kind="$1" at="$2" cmd_base="$3" base=/ k a b c w shown
   case "$kind" in
     W) base="$(_agent_vm_git_spelling "$at")" || return 0 ;;
     B) cmd_base="$at" ;;
-    *) scope="" ;;
   esac
-  _agent_vm_git_at "$kind" "$at" config --list ${scope:+"$scope"} --show-origin --includes 2>/dev/null \
+  _agent_vm_git_at "$kind" "$at" config --list --show-origin --includes 2>/dev/null \
     | awk -F '\t' '
         {
           origin = $1; kv = substr($0, length($1) + 2); f = ""
@@ -593,7 +593,7 @@ _agent_vm_sha256_sums_check() {
       echo "Error: no checksum listed for $f." >&2
       return 1
     fi
-    actual="$(_agent_vm_sha256 < "$dir/$f" 2>/dev/null | cut -d' ' -f1)"
+    actual="$( { _agent_vm_sha256 < "$dir/$f"; } 2>/dev/null | cut -d' ' -f1)"
     if [[ -z "$actual" || "$actual" != "$expected" ]]; then
       echo "Error: checksum mismatch for $f (expected $expected, got ${actual:-unreadable})." >&2
       return 1

@@ -369,3 +369,6 @@ if _agent_vm_sha256_sums_check "$(sums)" "$SB/sums" missing.zip >/dev/null 2>&1;
 else
   pass "an unlisted file is refused"
 fi
+rm "$SB/sums/c.zip"
+check "a listed file missing: agent-vm's error only" \
+  "$(_agent_vm_sha256_sums_check "$(sums)" "$SB/sums" c.zip 2>&1 | grep -c 'No such file')" "0"

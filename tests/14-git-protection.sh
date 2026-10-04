@@ -344,7 +344,7 @@ rm -f "$CACHE_MODE"
 out="$(rec run true)"
 rec_has "edit $PV" && fail "cache: a running VM was changed" || pass "cache: a running VM is left as it is"
 rec_has "stop $PV" && fail "cache: a running VM was stopped" || pass "cache: and not stopped"
-case "$out" in *Warning*) fail "cache: a running VM warned about: $out" ;; *) pass "cache: and nothing said" ;; esac
+case "$out" in *Warning*|*"No such file"*) fail "cache: a running VM warned about: $out" ;; *) pass "cache: and nothing said" ;; esac
 AGENT_VM_TEST_STOPPED=1 rec run true >/dev/null
 rec_has "edit $PV --set .mountType = \"reverse-sshfs\" | .mounts = [{$(mnt "$PROJ"), \"writable\": true, $SSHFS_RO}]" \
   && pass "cache: a stopped VM gets its shares with the cache off" || fail "cache: not updated: $(grep '^edit' "$REC")"
@@ -433,7 +433,7 @@ else
   fi
   rm -f "$(_agent_vm_lima_home)/$PV/ha.pid" "$(_agent_vm_lima_home)/$PV/lima.yaml"
   out="$(rec run true)"
-  case "$out" in *"another limactl"*) fail "hostagent: no pid file, warned anyway" ;; *) pass "hostagent: when it cannot tell, nothing is said" ;; esac
+  case "$out" in *"another limactl"*|*"No such file"*) fail "hostagent: no pid file, warned anyway: $out" ;; *) pass "hostagent: when it cannot tell, nothing is said" ;; esac
 fi
 
 # core.hooksPath in the project: its first component joins the names.
@@ -493,10 +493,10 @@ if command -v git >/dev/null 2>&1; then
   ( _agent_vm_fs_nocase() { return 1; }; _agent_vm_rel_in /Work/Proj/x /work/proj ) >/dev/null \
     && fail "a path in other capitals counted as inside where case matters" \
     || pass "and not where case matters"
-  # The same through a whole scan.
-  hp "$(printf '%s' "$PROJ" | tr '[:lower:]' '[:upper:]')/.husky/_"
+  # The same through a whole scan, as macOS (Windows ignores case already).
+  hp "$(_agent_vm_git_spelling "$PROJ" | tr '[:lower:]' '[:upper:]')/.husky/_"
   check "hooks: a hooks path in other capitals is named, where case is ignored" \
-    "$( uname() { echo Darwin; }; names )" '[".git", ".hg", ".husky"]'
+    "$( if ! _agent_vm_on_windows; then uname() { echo Darwin; }; fi; names )" '[".git", ".hg", ".husky"]'
   hp .husky/_
 
   # A repository below the project has hooks of its own.
@@ -726,6 +726,17 @@ if command -v git >/dev/null 2>&1; then
   ( git -C "$PROJ" config --unset-all includeIf.gitdir:/.path
     git -C "$PROJ" config --unset-all include.path
     git -C "$PROJ" config include.path ../.gitconfig )
+  # The other scopes git reads in the repository: a global alias run from the
+  # top of the project, and the worktree's config.
+  ( git config --global alias.g '!./g.sh'
+    git -C "$PROJ" config extensions.worktreeConfig true
+    git -C "$PROJ" config --worktree core.editor ./ed.sh )
+  risks="$(_agent_vm_share_config_risks "$PROJ")"
+  case "$risks" in *"alias.g = !./g.sh"*) pass "config: a global alias naming a file of the project" ;; *) fail "config: global: $risks" ;; esac
+  case "$risks" in *"core.editor = ./ed.sh"*) pass "config: the worktree's config" ;; *) fail "config: worktree: $risks" ;; esac
+  ( git config --global --unset alias.g
+    git -C "$PROJ" config --worktree --unset core.editor
+    git -C "$PROJ" config --unset extensions.worktreeConfig )
   names_rec '[".git", ".hg"]'
   out="$( unset AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS; _agent_vm_can_ask() { return 1; }; AGENT_VM_TEST_STOPPED=1 rec run true )"
   case "$out" in *"git on this machine uses these"*".gitconfig"*"Aborted."*) pass "config: a start stops on it" ;; *) fail "config: start: $out" ;; esac

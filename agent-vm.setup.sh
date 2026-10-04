@@ -404,7 +404,8 @@ code_server_schemas() {
         continue
       fi
       cat "$f.entry" >> "$dir/entries"
-      base="$(jq -r '(."$id" // .id // empty) | strings | select(test("^https?://"))' "$f")"
+      # A schema may be true or false, which has no $id to read.
+      base="$(jq -r 'objects | (."$id" // .id // empty) | strings | select(test("^https?://"))' "$f")"
       [[ -n "$base" ]] || base="$u"
       while IFS= read -r r; do
         r="$(schema_url_resolve "$base" "$r")" && next+=("$r")
