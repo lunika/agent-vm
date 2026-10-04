@@ -267,7 +267,7 @@ export const en = {
     optionsHeaders: ['Flag', 'What it does', 'Default'],
     options: [
       ['--disk GB', 'VM disk size. Can grow, never shrink.', 'the template’s (10)'],
-      ['--memory GB', 'VM memory. Clamped to half the host, per VM.', 'the template’s (3)'],
+      ['--memory GB', 'VM memory. Clamped to half the host, per VM.', 'the template’s (3, or 4 with code-server picked in the wizard)'],
       ['--cpus N', 'CPU count. Clamped to half the host, per VM.', 'the template’s (1)'],
       ['--ssh-port N', 'Fixed host port for the VM’s SSH, for tools that save it. `0` goes back to a new one on each start. Restarts a running VM, asked first.', 'a new one per start'],
       ['--reset', 'Destroy and re-clone the VM from the base template.', 'off'],
@@ -288,6 +288,7 @@ export const en = {
       ['AGENT_VM_BIN_DIR', 'Where `install` links `agent-vm`.', '~/.local/bin'],
       ['AGENT_VM_LIMA_DIR', 'Windows: where `setup` puts its Lima build.', '~/.local/share/lima-sylvinus'],
       ['AGENT_VM_QEMU_DIR', 'Windows: where QEMU is, when not on `PATH`.', '/c/Program Files/qemu'],
+      ['AGENT_VM_SSHFS_CACHE', '`1`: sshfs caches the writable shares too, faster on many files (`git status`, `find`); the VM may then see a file as it was up to 20 seconds before, and write that back. Applies when a VM is next started.', 'unset'],
       ['AGENT_VM_UNSAFE_WRITABLE_GIT', '`1`: same as `--unsafe-writable-git`.', 'unset'],
       ['AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS', '`1`: same as `--unsafe-disable-security-prompts`.', 'unset'],
     ],
@@ -442,7 +443,7 @@ export const en = {
             title: 'Why .git',
             paras: [
               'Git on your machine runs what a repository’s `.git/config` and hooks name: `core.fsmonitor` on every `git status`, hooks on commit. Your editor and prompt run `git status` on their own, so a VM able to write `.git` could run commands on your host within seconds, invisible in `git diff`.',
-              'With a Lima that has `sshfs.readonlyNames`, every `.git` and `.hg` in the shares is read-only for the VM, at any depth, enforced on the host by Lima’s SFTP server. The agent reads the history but cannot commit. It is not merged upstream yet ([lima-vm/lima#5529](https://github.com/lima-vm/lima/issues/5529)), so `agent-vm setup` offers a build that has it. The shares then use `reverse-sshfs`, slower on many files (see [Node.js](#node)).',
+              'With a Lima that has `sshfs.readonlyNames`, every `.git` and `.hg` in the shares is read-only for the VM, at any depth, enforced on the host by Lima’s SFTP server. The agent reads the history but cannot commit. It is not merged upstream yet ([lima-vm/lima#5529](https://github.com/lima-vm/lima/issues/5529)), so `agent-vm setup` offers a build that has it. The shares then use `reverse-sshfs`, slower on many files (see [Node.js](#node)), and without sshfs’s cache on the writable ones, so the VM never writes back a file as it was before you changed it: `AGENT_VM_SSHFS_CACHE=1` trades that for speed.',
             ],
             list: [],
             code: 'brew unlink lima; brew install sylvinus/tap/lima-sylvinus\nagent-vm doctor    # where you stand\n\n# let the agent commit anyway\nagent-vm --unsafe-writable-git claude',
@@ -450,7 +451,7 @@ export const en = {
           {
             title: 'Beyond the name .git',
             paras: [
-              'The folder a `core.hooksPath` points to in the project (`.husky` for husky) is read-only too. A folder holding git’s internals (`HEAD`, `objects/`, `refs/`, a `config`) is a repository under any name: setting `safe.bareRepository` to `explicit` in your global git config makes git ignore it. A config included from the project, or hooks at the top of a repository, are the same kind of door.',
+              'The folder a `core.hooksPath` points to in a share (`.husky` for husky) is read-only too, as is a link on the way to it, and the same goes for the repositories in your writable volumes. A folder holding git’s internals (`HEAD`, `objects/`, `refs/`, a `config`) is a repository under any name: setting `safe.bareRepository` to `explicit` in your global git config makes git ignore it, and one in a writable volume is read-only by its name. A config included from a share, a command or a hook git runs from one, or hooks at the top of a share, are the same kind of door.',
               'Before a VM boots with writable shares, agent-vm stops on each of these it finds, and on a Lima without `readonlyNames`, and asks: Enter, or no terminal, aborts. `doctor` lists them. `--unsafe-writable-git` (or `AGENT_VM_UNSAFE_WRITABLE_GIT=1` in your shell, never read from the project) lets the agent commit and reopens that path to your host, with a warning on every run.',
             ],
             list: [],
@@ -530,7 +531,7 @@ export const en = {
           {
             title: 'SSH from your machine',
             paras: [
-              'Do not connect VS Code Remote-SSH or open-remote-ssh to an agent VM. They run a server in the VM, which root in the VM controls, and the editor on your machine trusts it. Microsoft’s Remote-SSH page says so: “a compromised remote could use the VS Code Remote connection to execute code on your local machine”, and it is by design. Public write-ups show it opening a terminal on the host and running commands there. That removes the boundary agent-vm sets up, which is worse than opening the project in Restricted Mode. JetBrains Gateway most likely works the same way; it has not been checked. For language servers and a debugger with the VM’s packages, use [`agent-vm code`](#edit-with-the-vm-s-tools).',
+              'Do not connect VS Code Remote-SSH or open-remote-ssh to an agent VM. They run a server in the VM, which root in the VM controls, and the editor on your machine trusts it. Microsoft’s Remote-SSH page says so: “a compromised remote could use the VS Code Remote connection to execute code on your local machine”, and it is by design. Public write-ups show it opening a terminal on the host and running commands there. That removes the boundary agent-vm sets up, which is worse than opening the project in Restricted Mode. JetBrains Gateway does not say it is safer: its security model page says what the backend loads goes to your machine without asking, the backend opens links there (after a prompt), and decides which client version your machine downloads. For language servers and a debugger with the VM’s packages, use [`agent-vm code`](#edit-with-the-vm-s-tools).',
               'For scripts, `scp` or `rsync`, `agent-vm info` prints the SSH alias as `ssh_host`. Put these lines at the top of `~/.ssh/config`: a `ForwardAgent yes` found before them would hand the VM your SSH keys. `--ssh-port` pins the port for tools that save it.',
             ],
             list: [],
@@ -580,7 +581,8 @@ export const en = {
             title: 'Network and ports',
             paras: [
               'The VM reaches the internet and every service on your machine’s loopback, at `192.168.5.2`. Lima forwards every port a VM listens on to your `127.0.0.1` when it is free: a VM that listens first on 5432 receives the connections, and passwords, meant for your local Postgres. Blocking this is [on the roadmap](#roadmap).',
-              'So every VM can reach the editor of every other one. `agent-vm code` gives each its own password, made in that VM, and its own host name, `<vm-name>.localhost`: browsers keep cookies per host name and not per port, so at `127.0.0.1` any page a VM serves would receive the editor sessions of the others, and with them a way in. Chrome and Firefox resolve `*.localhost` themselves; Safari may not, and then `127.0.0.1` in a private window kept for the editor does the same.',
+              'So every VM can reach the editor of every other one. `agent-vm code` gives each its own password, made in that VM, and its own host name, `<vm-name>.localhost`: browsers keep cookies per host name and not per port, so a page a VM serves at `127.0.0.1` does not receive the editor sessions of the others. Chrome and Firefox resolve `*.localhost` themselves; Safari may not, and then `127.0.0.1` in a private window kept for the editor does the same.',
+              'That stops a page, not a VM bent on it. A VM can listen on a port Lima forwards to your machine and send your browser to another VM’s host name on that port: the browser hands it that editor’s session, and the VM can use it on the editor’s own port, with its terminals. Keeping VMs out of each other needs network isolation, which agent-vm does not have yet ([roadmap](#roadmap)). Until then, stop `agent-vm code` (Ctrl-C) when you are not using it, and treat an editor as reachable from every VM that runs.',
             ],
             list: [],
             code: '',

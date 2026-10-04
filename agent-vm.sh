@@ -32,8 +32,10 @@ AGENT_VM_STATE_DIR="${AGENT_VM_STATE_DIR:-${HOME}/.agent-vm}"
 # `install` makes is one. By hand, as macOS's readlink has no -f. `CDPATH=`
 # everywhere a relative path is cd'ed to: with it set, cd searches it first.
 _agent_vm_script_dir() {
-  local src="$1" dir
-  while [ -L "$src" ]; do
+  local src="$1" dir n=0
+  # At most 40 links, as the kernel follows: a loop would never end.
+  while [ -L "$src" ] && [ "$n" -lt 40 ]; do
+    n=$((n + 1))
     dir="$(CDPATH= cd -P -- "$(dirname "$src")" >/dev/null && pwd)"
     src="$(readlink "$src")"
     case "$src" in
@@ -126,16 +128,17 @@ _agent_vm_start_checks() {
   fi
 
   # With it, the names the shares need: those always listed, and one per
-  # hooks folder git runs from in the project (see _agent_vm_project_hooks),
-  # its first component. A dot-name (.husky, .githooks) is taken as is; any
-  # other is read-only in every folder of the project, so it is asked first
+  # hooks folder git runs from in a share (see _agent_vm_git_scan), its
+  # first component. A dot-name (.husky, .githooks) is taken as is; any
+  # other is read-only in every folder of every share, so it is asked first
   # (yes by default, and when no one can answer). A folder that cannot be
-  # protected, or one declined, is a risk to accept. So are git config files
-  # in the project, and settings running commands from it. Under --readonly
-  # the VM writes none of them: the names are taken as they come, with no
-  # warning and no question.
-  local hooks_rel hooks_in hooks_name hooks_names=()
+  # protected, or one declined, is a risk to accept. So are the scan's risks:
+  # git config files in a share, settings running commands from one, hooks
+  # linked into one. Under --readonly the VM writes none of them: the names
+  # are taken as they come, with no warning and no question.
+  local hooks_rel hooks_in hooks_name hooks_names=() scan=""
   if [[ -n "$protect_git" ]]; then
+    scan="$(_agent_vm_git_scan "$host_dir")"
     while IFS=$'\t' read -r hooks_rel hooks_in; do
       [[ -n "$hooks_rel" ]] || continue
       if [[ -n "$rdonly" ]]; then
@@ -145,8 +148,10 @@ _agent_vm_start_checks() {
       if ! hooks_name="$(_agent_vm_hooks_name "$hooks_in")"; then
         if [[ "$hooks_rel" == . ]]; then
           echo "Warning: git's core.hooksPath is the project directory itself, which the VM can write: git on this machine runs the hooks the agent puts there." >&2
+        elif [[ "$hooks_in" == . ]]; then
+          echo "Warning: git's core.hooksPath is '$hooks_rel', a writable volume itself: git on this machine runs the hooks the agent puts there." >&2
         else
-          echo "Warning: git's core.hooksPath is '$hooks_rel', in the project, and its name cannot be made read-only: git on this machine runs the hooks the agent puts there." >&2
+          echo "Warning: git's core.hooksPath is '$hooks_rel', which the VM can write, and its name cannot be made read-only: git on this machine runs the hooks the agent puts there." >&2
         fi
         if [[ -z "$vm_up" ]] && ! _agent_vm_confirm_unsafe; then
           echo "Aborted. Point core.hooksPath to a folder of the project (agent-vm keeps it read-only), or outside it." >&2
@@ -166,16 +171,16 @@ _agent_vm_start_checks() {
       fi
       hooks_names+=("$hooks_name")
       hooks_notes="$hooks_notes$(_agent_vm_hooks_note "$hooks_rel" "$hooks_name")"$'\n'
-    done <<< "$(_agent_vm_share_hooks "$host_dir")"
+    done <<< "$(_agent_vm_scan_part H "$scan")"
     ro_names="$(_agent_vm_names_json ${hooks_names[@]+"${hooks_names[@]}"})"
 
     local git_risks=""
-    [[ -n "$rdonly" ]] || git_risks="$(_agent_vm_share_config_risks "$host_dir")"
+    [[ -n "$rdonly" ]] || git_risks="$(_agent_vm_scan_part R "$scan")"
     if [[ -n "$git_risks" ]]; then
       echo "Warning: git on this machine uses these, and the VM can write them:" >&2
       printf '%s\n' "$git_risks" | sed 's/^/  /' >&2
       if [[ -z "$vm_up" ]] && ! _agent_vm_confirm_unsafe; then
-        echo "Aborted. Move them out of the project, or have them name commands outside it." >&2
+        echo "Aborted. Move them out of the shared folders, or have them name commands outside them." >&2
         return 1
       fi
     fi
@@ -221,7 +226,39 @@ _agent_vm_apply_shares() {
     echo "$out" >&2
     return 1
   fi
-  _agent_vm_record_mounts "$vm" "$json"
+  _agent_vm_record_mounts "$vm" "$json" || return 1
+  _agent_vm_sshfs_cache_mode >| "$AGENT_VM_STATE_DIR/.agent-vm-sshfs-cache-$vm"
+}
+
+# Before the stopped <vm> boots, fails, saying why, unless what Lima's config
+# gives it is what agent-vm set: for a VM whose .git is protected (the
+# caller's protect_git and ro_names), every share with the read-only names
+# (see _agent_vm_live_shares_why); for one that shares nothing (the caller's
+# scratch, or <none> set), no share at all. Lima merges the mounts of its
+# _config/default.yaml and override.yaml into every VM, and agent-vm's edit
+# cannot remove them.
+_agent_vm_check_before_start() {
+  # shellcheck disable=SC2034 # set by _agent_vm_live_fields, all three
+  local vm="$1" none="${2:-$scratch}" live why cfg live_vmtype live_mtype live_json
+  [[ -n "$protect_git" || -n "$none" ]] || return 0
+  cfg="$(_agent_vm_lima_home)/_config"
+  if ! live="$(_agent_vm_live_config "$vm")" || ! _agent_vm_live_fields "$live"; then
+    echo "Error: could not read Lima's config for VM '$vm', so what it would boot with is not known." >&2
+    return 1
+  fi
+  if [[ -n "$none" ]]; then
+    [[ "$live_json" == null || "$live_json" == "[]" ]] && return 0
+    echo "Error: Lima gives VM '$vm' shares agent-vm did not ask for, so it would not boot with nothing of yours." >&2
+    echo "  Look for 'mounts' in $cfg/override.yaml and default.yaml, and remove them." >&2
+    return 1
+  fi
+  why="$(_agent_vm_live_shares_why "$live" "$ro_names")" && return 0
+  echo "Error: VM '$vm' would boot with .git writable: $why." >&2
+  case "$why" in
+    *"mount type"*) echo "  Look for 'mountType' in $cfg/override.yaml and default.yaml, and remove it." >&2 ;;
+    *) echo "  Look for 'mounts' in $cfg/override.yaml and default.yaml, and remove them." >&2 ;;
+  esac
+  return 1
 }
 
 # The caller's memory, cpus, ssh_port and disk, on the stopped <vm>. The disk
@@ -247,15 +284,14 @@ _agent_vm_apply_resources() {
 # The env push and the write probe (see _agent_vm_push_env_and_probe), with
 # the caller's vm_name, host_dir, env_payload, guest_env, guest_runtime and
 # scratch, into its probe_out and is_writable: true, false, or lost when the
-# share is not mounted. A scratch VM works on its own disk: nothing reaches
-# this machine there, by design.
+# share is not mounted.
 _agent_vm_push_and_probe() {
   local st=0
   probe_out="$(_agent_vm_push_env_and_probe "$vm_name" "$host_dir" "$env_payload" \
     "$guest_env" "$guest_runtime")" || st=$?
   case "$st" in
     0) is_writable="true" ;;
-    2) if [[ -n "$scratch" ]]; then is_writable="true"; else is_writable="lost"; fi ;;
+    2) is_writable="lost" ;;
     *) is_writable="false" ;;
   esac
   [[ "$probe_out" == *env-ok* ]] || echo "Warning: failed to push the env files into VM '$vm_name'." >&2
@@ -424,34 +460,32 @@ _agent_vm_ensure_running() {
   _agent_vm_running "$vm_name" && was_running=1
 
   # Shares recorded otherwise than asked: the .git protection (git_stale), its
-  # names (names_stale), the mode (mode_stale). A stopped VM is changed before
-  # it boots, so nothing starting with it gets a writable window; a running
-  # one keeps its shares until stopped, or is offered a restart.
+  # names (names_stale), the mode (mode_stale), sshfs's cache (cache_stale). A
+  # stopped VM is changed before it boots, so nothing starting with it gets a
+  # writable window; a running one keeps its shares until stopped, or is
+  # offered a restart (never for the cache alone).
   local was_protected="" git_stale="" names_stale="" mode_stale="" cache_stale=""
   _agent_vm_mounts_protect_git "$vm_name" && was_protected=1
-  # The record against what Lima has for the VM, for a VM that exists: a
-  # share without names set outside agent-vm makes it unprotected, whatever
-  # was recorded. Which names, the record says (names_stale below).
-  if [[ -n "$protect_git" && -n "$was_protected" && -z "$is_new_vm" ]] \
-     && ! _agent_vm_live_shares_protected "$vm_name"; then
-    was_protected=""
-  fi
-  # Running, it is served by the limactl that started it, which may not be
-  # the one checked above.
-  if [[ -n "$protect_git" && -n "$was_protected" ]] && _agent_vm_running "$vm_name" \
-     && ! _agent_vm_hostagent_is_limactl "$vm_name"; then
-    echo "Warning: VM '$vm_name' was started by another limactl than $(command -v limactl), which may not keep .git read-only." >&2
-    was_protected=""
+  if [[ -n "$protect_git" && -n "$was_protected" ]]; then
+    # The record against what Lima has for an existing VM: a share without
+    # names, set outside agent-vm, leaves it unprotected whatever was
+    # recorded. Which names, the record says (names_stale below).
+    if [[ -z "$is_new_vm" ]] \
+       && ! _agent_vm_live_shares_why "$(_agent_vm_live_config "$vm_name")" >/dev/null; then
+      was_protected=""
+    # Running, it is served by the limactl that started it, which may not be
+    # the one checked above.
+    elif [[ -n "$was_running" ]] && ! _agent_vm_hostagent_is_limactl "$vm_name"; then
+      echo "Warning: VM '$vm_name' was started by another limactl than $(_agent_vm_limactl_path), which may not keep .git read-only." >&2
+      was_protected=""
+    fi
   fi
   [[ "$was_protected" != "$protect_git" ]] && git_stale=1
-  if [[ -n "$protect_git" && -n "$was_protected" ]] \
-     && ! _agent_vm_mounts_have_readonly_names "$vm_name" "$ro_names"; then
-    names_stale=1
-  fi
-  # Shares from before sshfs's cache was turned off: set again before it
-  # boots, never a reason to restart it.
-  if [[ -n "$protect_git" && -n "$was_protected" ]] && ! _agent_vm_mounts_cache_off "$vm_name"; then
-    cache_stale=1
+  if [[ -n "$protect_git" && -n "$was_protected" ]]; then
+    _agent_vm_mounts_have_readonly_names "$vm_name" "$ro_names" || names_stale=1
+    # Shares made otherwise than _agent_vm_build_mounts_json would now (sshfs's
+    # cache): set again before it boots, never a reason to restart it.
+    _agent_vm_mounts_sshfs_current "$vm_name" || cache_stale=1
   fi
   if [[ -n "$scratch" ]]; then
     # Shares nothing, as made: nothing to bring in line.
@@ -513,20 +547,13 @@ _agent_vm_ensure_running() {
     _agent_vm_apply_shares "$vm_name" "$host_dir" "$want_writable" || return 1
   fi
 
-  # A share agent-vm did not set, which its edit cannot remove: one from
-  # Lima's _config, added to every VM.
-  if [[ -z "$was_running" && -n "$protect_git" ]] && ! _agent_vm_live_shares_protected "$vm_name" "$ro_names"; then
-    echo "Error: Lima gives VM '$vm_name' a share without the read-only names, so the VM could write the .git in it." >&2
-    echo "  Look for 'mounts' in $(_agent_vm_lima_home)/_config/override.yaml and default.yaml, and remove them." >&2
-    return 1
-  fi
-
   if [[ -z "$was_running" ]]; then
+    _agent_vm_check_before_start "$vm_name" || return 1
     echo "Starting VM '$vm_name'..."
     local start_log
     if ! start_log=$(limactl start "$vm_name" 2>&1); then
       local ha_log
-      ha_log="$(_agent_vm_lima_home)/$vm_name/ha.stderr.log"
+      ha_log="$(_agent_vm_ha_log "$vm_name")"
       echo "Error: Failed to start VM '$vm_name'." >&2
       echo "--- limactl start output ---" >&2
       echo "$start_log" >&2
@@ -606,6 +633,7 @@ _agent_vm_ensure_running() {
       _agent_vm_migrate_0_1_if_needed "$vm_name" || return 1
     fi
     _agent_vm_apply_shares "$vm_name" "$host_dir" "$want_writable" || return 1
+    _agent_vm_check_before_start "$vm_name" || return 1
     # Checked: the probe below cannot tell a dead VM from a read-only one.
     if ! limactl start "$vm_name" &>/dev/null; then
       echo "Error: VM '$vm_name' did not come back up after changing the project mount." >&2
@@ -618,7 +646,7 @@ _agent_vm_ensure_running() {
       if [[ "$is_writable" == lost ]]; then
         echo "Error: the project share did not mount in VM '$vm_name':" >&2
         echo "  $host_dir" >&2
-        echo "Lima's log: $(_agent_vm_lima_home)/$vm_name/ha.stderr.log" >&2
+        echo "Lima's log: $(_agent_vm_ha_log "$vm_name")" >&2
       elif [[ "$want_writable" == "true" ]]; then
         echo "Error: project directory is still not writable inside the VM:" >&2
         echo "  $host_dir" >&2
@@ -637,7 +665,14 @@ _agent_vm_ensure_running() {
   if [[ -n "$rdonly" ]]; then
     _agent_vm_mount_is_host_enforced "$vm_name"
     case $? in
-      0) echo "Read-only: the project and every other share (enforced on the host)." ;;
+      0)
+        # Every share, those Lima's _config adds to every VM included.
+        if [[ "$(_agent_vm_live_config "$vm_name")" == *'"writable":true'* ]]; then
+          echo "Error: --readonly cannot hold: Lima gives VM '$vm_name' a writable share agent-vm did not set." >&2
+          echo "  Look for 'mounts' in $(_agent_vm_lima_home)/_config/override.yaml and default.yaml." >&2
+          return 1
+        fi
+        echo "Read-only: the project and every other share (enforced on the host)." ;;
       1) echo "Error: --readonly cannot be enforced with this mount type." >&2
          echo "  Lima only applies it inside the guest for reverse-sshfs (without" >&2
          echo "  readonlyNames) and for virtiofs under QEMU, where root in the VM" >&2
@@ -858,7 +893,8 @@ agent-vm() {
 # VAR=value assignments working. `env --`: GNU env still reads assignments
 # after it, and a command starting with `-` (`run -i foo`) is not taken for
 # one of its options. A command that is not there is said so, with env's
-# status: an agent installed only as an editor extension has no command.
+# status: an agent installed only as an editor extension has no command. A
+# path is env's to run: it says why it cannot (a script without +x, 126).
 #
 # Usage: _agent_vm_lima_run <vm_name> <host_dir> <tty:1|""> <command> [args...]
 _agent_vm_lima_run() {
@@ -867,7 +903,7 @@ _agent_vm_lima_run() {
   local shell_opts=(--workdir "$host_dir")
   [[ -n "$want_tty" ]] && shell_opts+=(--tty)
   limactl shell "${shell_opts[@]}" "$vm_name" -- zsh -l -c \
-    'case "$1" in *=*) ;; *) command -v -- "$1" >/dev/null || { print -r -- "agent-vm: $1 is not installed in this VM." >&2; exit 127; } ;; esac; exec env -- "$@"' \
+    'case "$1" in *=*|*/*) ;; *) command -v -- "$1" >/dev/null || { print -r -- "agent-vm: $1 is not installed in this VM." >&2; exit 127; } ;; esac; exec env -- "$@"' \
     agent-vm "$@"
 }
 

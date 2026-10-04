@@ -152,6 +152,15 @@ sshfs_stub '    -o follow_symlinks'
 check "sshfs wrapper: an older sshfs gets the arguments unchanged" \
   "$(sh "$SB/sshfs-wrapper" ':/p' /p -o slave)" ":/p /p -o slave"
 
+# An agent is there as a command, as an extension, or both: either way its
+# config (managed settings, MCP servers) is written. The lines setup derives
+# it with, run as setup does.
+has_block="$(awk '/^HAS_CLAUDE=0 HAS_CODEX=0 HAS_VIBE=0$/,/HAS_VIBE=1$/' "$SETUP_SH")"
+has() { ( INSTALL_CLAUDE="$1" INSTALL_CODE_CLAUDE="$2" INSTALL_CODEX="$3" INSTALL_CODE_CODEX="$4" INSTALL_VIBE="$5" INSTALL_CODE_VIBE="$6"
+          eval "$has_block"; echo "$HAS_CLAUDE$HAS_CODEX$HAS_VIBE" ); }
+check "setup: the agents' config, for a command or an extension" \
+  "$(has 1 0 0 0 0 0) $(has 0 1 0 0 0 0) $(has 0 0 0 1 0 0) $(has 0 0 0 0 1 1) $(has 0 0 0 0 0 0)" "100 100 010 001 000"
+
 # =============================================================================
 section "MCP config writer"
 # =============================================================================
@@ -235,19 +244,37 @@ else
   echo '{"$ref":"../top.json"}' > "$SCH/web/$(web https://h.test/s/rel.json)"
   echo '{"type":"string"}' > "$SCH/web/$(web https://h.test/top.json)"
   echo '{"type":"number"}' > "$SCH/web/$(web https://www.schemastore.org/b)"
+  # c: listed at one URL, its $id another, which its relative references
+  # follow, as the editor's do. d: references up two folders.
+  mkdir -p "$SCH/ext/c"
+  echo '{"contributes":{"jsonValidation":[{"fileMatch":"c.json","url":"https://www.schemastore.org/package"},{"fileMatch":"d.json","url":"https://h.test/s/a/b/d.json"}]}}' > "$SCH/ext/c/package.json"
+  echo '{"$id":"https://json.schemastore.org/package.json","properties":{"e":{"$ref":"eslintrc.json#"}}}' > "$SCH/web/$(web https://www.schemastore.org/package)"
+  echo '{"type":"boolean"}' > "$SCH/web/$(web https://www.schemastore.org/eslintrc.json)"
+  echo '{"$ref":"../../c.json"}' > "$SCH/web/$(web https://h.test/s/a/b/d.json)"
+  echo '{"type":"null"}' > "$SCH/web/$(web https://h.test/s/c.json)"
   out="$( ( curl() {
-              local o="" u=""
-              while [ $# -gt 0 ]; do case "$1" in -o) o="$2"; shift 2 ;; -*) shift ;; *) u="$1"; shift ;; esac; done
-              echo "$u" >> "$SCH/fetched"
-              [ -f "$SCH/web/$(web "$u")" ] || return 22
-              cp "$SCH/web/$(web "$u")" "$o"
+              local o="" st=0
+              echo call >> "$SCH/calls"
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  -o) o="$2"; shift 2 ;;
+                  --parallel-max|--max-time) shift 2 ;;
+                  -*) shift ;;
+                  *)
+                    echo "$1" >> "$SCH/fetched"
+                    if [ -f "$SCH/web/$(web "$1")" ]; then cp "$SCH/web/$(web "$1")" "$o"; else st=22; fi
+                    shift ;;
+                esac
+              done
+              return "$st"
             }
             set -euo pipefail
-            eval "$(awk '/^code_server_schemas\(\) \{/,/^\}/' "$SETUP_SH")"
+            eval "$(awk '/^(code_server_schemas|schema_url_resolve)\(\) \{/,/^\}/' "$SETUP_SH")"
             code_server_schemas "$SCH/ext" "$SCH/machine/settings.json"; echo "rc=$?" ) 2>&1)"
   check "every schema named, and every one they refer to, by the URL the editor asks" \
     "$(jq -r '."json.schemas"[].url' "$SCH/machine/settings.json" 2>/dev/null | sort | tr '\n' ' ')" \
-    "https://h.test/abs.json https://h.test/s/a https://h.test/s/rel.json https://h.test/top.json https://json.schemastore.org/b "
+    "https://h.test/abs.json https://h.test/s/a https://h.test/s/a/b/d.json https://h.test/s/c.json https://h.test/s/rel.json https://h.test/top.json https://json.schemastore.org/b https://json.schemastore.org/eslintrc.json https://www.schemastore.org/package "
+  check "a level of references fetched in one call" "$(wc -l < "$SCH/calls" | tr -d ' ')" "3"
   check "each with its content" \
     "$(jq -r '."json.schemas"[] | select(.url == "https://h.test/top.json") | .schema.type' "$SCH/machine/settings.json" 2>/dev/null)" "string"
   check "json.schemastore.org fetched from www.schemastore.org, where it redirects" \
@@ -273,8 +300,8 @@ $(awk '/^if \[\[ "\$INSTALL_CODE_SERVER" == "1" \]\]; then/,/^fi$/' "$SETUP_SH")
 $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
   # <home> <claude> <codex> <vibe>: the extensions asked for.
   # Under set -e, as the script runs: a failing step must show here. Twice:
-  # setup can be run again on a base. The first run's state is kept in
-  # <home>/first.
+  # what it writes must not pile up when it runs again in the same VM. The
+  # first run's state is kept in <home>/first.
   run_cs_block() {
     mkdir -p "$1/.config/code-server"; echo "password: from-the-base" > "$1/.config/code-server/config.yaml"
     ( set -e
@@ -282,7 +309,7 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
       HAS_CLAUDE="$2" HAS_CODEX="$3" HAS_VIBE="$4" INSTALL_OPENCODE=0
       curl() { echo "curl $*" >> "$HOME/calls.log"; }
       code-server() { echo "code-server $*" >> "$HOME/calls.log"; }
-      code_server_schemas() { echo "schemas $*" >> "$HOME/calls.log"; }
+      code_server_schemas() { echo "schemas $*" >> "$HOME/calls.log"; mkdir -p "$(dirname "$2")"; echo '{"json.schemas":[]}' > "$2"; }
       eval "$cs_block"
       mkdir -p "$HOME/first"
       for f in .codex/config.toml .vibe/config.toml; do [ ! -f "$HOME/$f" ] || cp "$HOME/$f" "$HOME/first/${f%%/*}"; done

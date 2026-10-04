@@ -175,14 +175,16 @@ _agent_vm_info() {
     esac
   fi
   if [[ "$protected" == 1 ]]; then
+    local scan
+    scan="$(_agent_vm_git_scan "$dir")"
     while IFS=$'\t' read -r rel in_repo; do
       [[ -n "$rel" ]] || continue
       if ! _agent_vm_hooks_name "$in_repo" >/dev/null; then
         questions="${questions:+$questions,}hooks"
         break
       fi
-    done <<< "$(_agent_vm_share_hooks "$dir")"
-    [[ -z "$(_agent_vm_share_config_risks "$dir")" ]] || questions="${questions:+$questions,}git-config"
+    done <<< "$(_agent_vm_scan_part H "$scan")"
+    [[ -z "$(_agent_vm_scan_part R "$scan")" ]] || questions="${questions:+$questions,}git-config"
   fi
   case "$(_agent_vm_bare_repo_state)" in
     unset|old) questions="${questions:+$questions,}bare-repo" ;;

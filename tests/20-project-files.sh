@@ -116,9 +116,9 @@ printf 'B=2\r\nA=project\r\n' > "$PF/.agent-vm.env"
 out="$(PATH="$SB/localvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "A=shared" "$PF/.agent-vm.env" "$PF/.agent-vm.runtime.sh"; echo "rc=$?")"
 check "the VM writes the shared payload, then the project's file, without CRs" \
   "$(od -c < "$GH/.agent-vm.env" | grep -c '\\r') $(tr '\n' ' ' < "$GH/.agent-vm.env")" "0 A=shared B=2 A=project "
-check "and says it did, that the runtime is there, and that its write reached the project" \
-  "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok runtime-found probe-written rc=0"
-check "the write probe leaves no file in the project" "$(ls -A "$PF" | grep -c agent-vm-write-probe)" "0"
+check "and says it did, that the runtime is there, and that it sees the project from this machine" \
+  "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok runtime-found share-ok rc=0"
+check "the probes leave no file in the project" "$(ls -A "$PF" | grep -c 'agent-vm-.*probe')" "0"
 if _agent_vm_on_windows; then
   printf '  skip the guest env file is private (permission bits are emulated on Windows)\n'
 else
@@ -126,10 +126,11 @@ else
 fi
 rm -f "$PF/.agent-vm.runtime.sh"
 out="$(PATH="$SB/localvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "" "$PF/.agent-vm.env" "$PF/.agent-vm.runtime.sh")"
-check "no runtime there: not found" "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok probe-written"
-# A write that stays in the VM: the share is not mounted (a guest whose
-# project path is a directory of its own). `limactl shell <vm> sh -c <script>
-# sh <dir> ...`: the script runs on that other directory.
+check "no runtime there: not found" "$(printf '%s' "$out" | tr '\n' ' ')" "env-ok share-ok"
+# The share is not mounted: a guest whose project path is a directory of its
+# own, which does not hold what this machine put in the project. `limactl
+# shell <vm> sh -c <script> sh <dir> ...`: the script runs on that other
+# directory.
 mkdir -p "$SB/guest-only" "$SB/lostvm"
 cat > "$SB/lostvm/limactl" <<STUB
 #!/usr/bin/env bash
@@ -140,8 +141,37 @@ HOME="$GH" exec sh -c "\$script" sh "$SB/guest-only" "\$@"
 STUB
 chmod +x "$SB/lostvm/limactl"
 out="$(PATH="$SB/lostvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "" </dev/null; echo "rc=$?")"
-case "$out" in *probe-written*"rc=2") pass "a write that does not reach the project: the share is not mounted" ;; *) fail "lost share: $out" ;; esac
+case "$out" in *share-ok*) fail "lost share: seen as mounted: $out" ;; *"rc=2") pass "the project not seen from the VM: the share is not mounted" ;; *) fail "lost share: $out" ;; esac
+check "and the VM's own directory is left empty" "$(ls -A "$SB/guest-only" | wc -l | tr -d ' ')" "0"
+check "and the project too" "$(ls -A "$PF" | grep -c 'agent-vm-.*probe')" "0"
+# A scratch VM shares nothing: nothing is put on this machine, and its own
+# directory is left as it was.
+out="$(scratch=1 PATH="$SB/lostvm:$PATH" _agent_vm_push_env_and_probe vm "$PF" "" </dev/null; echo "rc=$?")"
+case "$out" in *"rc=0") pass "scratch: writable, on the VM's own disk" ;; *) fail "scratch probe: $out" ;; esac
+check "scratch: its directory is left empty" "$(ls -A "$SB/guest-only" | wc -l | tr -d ' ')" "0"
 rm -rf "$SB/guest-only" "$SB/lostvm"
+# A command in the VM (_agent_vm_lima_run): `limactl shell ... -- zsh -l -c
+# <script> agent-vm <command>`, run here.
+if command -v zsh >/dev/null 2>&1; then
+  mkdir -p "$SB/runvm"
+  cat > "$SB/runvm/limactl" <<'STUB'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do [ "$1" = --workdir ] && { cd "$2" || exit 1; shift; }; shift; done
+shift
+exec "$@"
+STUB
+  chmod +x "$SB/runvm/limactl"
+  mkdir -p "$SB/runwd/adir"
+  printf '#!/bin/sh\necho ran\n' > "$SB/runwd/noexec.sh"
+  lrun() { PATH="$SB/runvm:$PATH" _agent_vm_lima_run vm "$SB/runwd" "" "$@" 2>&1; echo "rc=$?"; }
+  case "$(lrun agent-vm-nosuchcmd)" in *"agent-vm-nosuchcmd is not installed in this VM."*"rc=127") pass "run: a command not there, said so" ;; *) fail "run: missing: $(lrun agent-vm-nosuchcmd)" ;; esac
+  case "$(lrun ./noexec.sh)" in *"not installed"*) fail "run: a script without +x said not installed" ;; *"rc=126") pass "run: a script without +x, env's reason and status" ;; *) fail "run: noexec: $(lrun ./noexec.sh)" ;; esac
+  case "$(lrun ./adir)" in *"not installed"*) fail "run: a directory said not installed" ;; *"rc=126") pass "run: a directory, env's reason" ;; *) fail "run: dir: $(lrun ./adir)" ;; esac
+  case "$(lrun X=1 sh -c 'echo "$X"')" in *"1"*"rc=0") pass "run: an assignment before the command" ;; *) fail "run: assignment: $(lrun X=1 sh -c 'echo "$X"')" ;; esac
+  rm -rf "$SB/runvm" "$SB/runwd"
+else
+  printf '  skip a command in the VM (zsh is not installed)\n'
+fi
 if command -v zsh >/dev/null 2>&1; then
   printf '#!/usr/bin/env bash\r\necho "ran:${BASH_VERSION:+bash}" > "$HOME/rt-out"\r\n' > "$PF/.agent-vm.runtime.sh"
   PATH="$SB/localvm:$PATH" _agent_vm_run_project_runtime vm "$PF" "$PF/.agent-vm.runtime.sh" >/dev/null 2>&1

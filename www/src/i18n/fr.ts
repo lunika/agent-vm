@@ -269,7 +269,7 @@ export const fr: Dictionary = {
     optionsHeaders: ['Option', 'Rôle', 'Défaut'],
     options: [
       ['--disk GB', 'Taille du disque. Peut grandir, jamais rétrécir.', 'celle de l\'image (10)'],
-      ['--memory GB', 'Mémoire de la VM. Plafonnée à la moitié de l\'hôte, par VM.', 'celle de l\'image (3)'],
+      ['--memory GB', 'Mémoire de la VM. Plafonnée à la moitié de l\'hôte, par VM.', 'celle de l\'image (3, ou 4 avec code-server choisi dans l\'assistant)'],
       ['--cpus N', 'Nombre de CPU. Plafonné à la moitié de l\'hôte, par VM.', 'celui de l\'image (1)'],
       ['--ssh-port N', 'Port fixe sur l\'hôte pour le SSH de la VM, pour les outils qui l\'enregistrent. `0` revient à un nouveau port à chaque démarrage. Redémarre une VM en marche, après confirmation.', 'un nouveau par démarrage'],
       ['--reset', 'Détruit la VM et la re-clone depuis l\'image de base.', 'inactif'],
@@ -290,6 +290,7 @@ export const fr: Dictionary = {
       ['AGENT_VM_BIN_DIR', 'Où `install` place le lien `agent-vm`.', '~/.local/bin'],
       ['AGENT_VM_LIMA_DIR', 'Windows : où `setup` installe sa version de Lima.', '~/.local/share/lima-sylvinus'],
       ['AGENT_VM_QEMU_DIR', 'Windows : où trouver QEMU, s\'il n\'est pas dans le `PATH`.', '/c/Program Files/qemu'],
+      ['AGENT_VM_SSHFS_CACHE', '`1` : sshfs met aussi en cache les partages modifiables, plus rapide sur beaucoup de fichiers (`git status`, `find`) ; la VM peut alors voir un fichier tel qu\'il était jusqu\'à 20 secondes avant, et le réécrire ainsi. S\'applique au prochain démarrage d\'une VM.', 'non définie'],
       ['AGENT_VM_UNSAFE_WRITABLE_GIT', '`1` : équivaut à `--unsafe-writable-git`.', 'non définie'],
       ['AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS', '`1` : équivaut à `--unsafe-disable-security-prompts`.', 'non définie'],
     ],
@@ -444,7 +445,7 @@ export const fr: Dictionary = {
             title: 'Pourquoi .git',
             paras: [
               'Git, sur ta machine, exécute ce que désignent le `.git/config` et les hooks d\'un dépôt : `core.fsmonitor` à chaque `git status`, les hooks au commit. Ton éditeur et ton prompt lancent `git status` d\'eux-mêmes : une VM capable d\'écrire dans `.git` pourrait lancer des commandes sur ton hôte en quelques secondes, sans que rien n\'apparaisse dans `git diff`.',
-              'Avec un Lima qui a `sshfs.readonlyNames`, chaque `.git` et `.hg` des partages est en lecture seule pour la VM, à toute profondeur, et c\'est le serveur SFTP de Lima, sur l\'hôte, qui l\'impose. L\'agent lit l\'historique mais ne peut pas commiter. Ce n\'est pas encore intégré en amont ([lima-vm/lima#5529](https://github.com/lima-vm/lima/issues/5529)) : `agent-vm setup` propose une version qui l\'a. Les partages passent alors en `reverse-sshfs`, plus lent sur beaucoup de fichiers (voir [Node.js](#node)).',
+              'Avec un Lima qui a `sshfs.readonlyNames`, chaque `.git` et `.hg` des partages est en lecture seule pour la VM, à toute profondeur, et c\'est le serveur SFTP de Lima, sur l\'hôte, qui l\'impose. L\'agent lit l\'historique mais ne peut pas commiter. Ce n\'est pas encore intégré en amont ([lima-vm/lima#5529](https://github.com/lima-vm/lima/issues/5529)) : `agent-vm setup` propose une version qui l\'a. Les partages passent alors en `reverse-sshfs`, plus lent sur beaucoup de fichiers (voir [Node.js](#node)), et sans le cache de sshfs sur ceux qui sont modifiables, pour que la VM ne réécrive jamais un fichier tel qu\'il était avant que tu le changes : `AGENT_VM_SSHFS_CACHE=1` échange cela contre de la vitesse.',
             ],
             list: [],
             code: 'brew unlink lima; brew install sylvinus/tap/lima-sylvinus\nagent-vm doctor    # où tu en es\n\n# laisser l\'agent commiter quand même\nagent-vm --unsafe-writable-git claude',
@@ -452,7 +453,7 @@ export const fr: Dictionary = {
           {
             title: 'Au-delà du nom .git',
             paras: [
-              'Le dossier vers lequel pointe un `core.hooksPath` du projet (`.husky` pour husky) est aussi en lecture seule. Un dossier qui contient les fichiers internes de git (`HEAD`, `objects/`, `refs/`, un `config`) est un dépôt sous n\'importe quel nom : régler `safe.bareRepository` à `explicit` dans ta config git globale le fait ignorer par git. Une config incluse depuis le projet, ou des hooks à la racine d\'un dépôt, ouvrent la même porte.',
+              'Le dossier vers lequel pointe un `core.hooksPath` dans un partage (`.husky` pour husky) est aussi en lecture seule, comme un lien sur le chemin qui y mène, et de même pour les dépôts de tes volumes modifiables. Un dossier qui contient les fichiers internes de git (`HEAD`, `objects/`, `refs/`, un `config`) est un dépôt sous n\'importe quel nom : régler `safe.bareRepository` à `explicit` dans ta config git globale le fait ignorer par git, et celui d\'un volume modifiable est en lecture seule par son nom. Une config incluse depuis un partage, une commande ou un hook que git y lance, ou des hooks à la racine d\'un partage, ouvrent la même porte.',
               'Avant de démarrer une VM aux partages modifiables, agent-vm s\'arrête sur chacun de ceux qu\'il trouve, et sur un Lima sans `readonlyNames`, pour demander : Entrée, ou l\'absence de terminal, annule. `doctor` les liste. `--unsafe-writable-git` (ou `AGENT_VM_UNSAFE_WRITABLE_GIT=1` dans ton shell, jamais lu depuis le projet) laisse l\'agent commiter et rouvre ce chemin vers ton hôte, avec un avertissement à chaque lancement.',
             ],
             list: [],
@@ -532,7 +533,7 @@ export const fr: Dictionary = {
           {
             title: 'SSH depuis ta machine',
             paras: [
-              'Ne branche pas VS Code Remote-SSH ou open-remote-ssh sur une VM d\'agent. Ils font tourner un serveur dans la VM, que contrôle root dans la VM, et l\'éditeur sur ta machine lui fait confiance. La page de Remote-SSH chez Microsoft le dit : « a compromised remote could use the VS Code Remote connection to execute code on your local machine », et c\'est voulu. Des articles publics le montrent ouvrant un terminal sur l\'hôte et y lançant des commandes. Cela supprime la frontière que pose agent-vm, ce qui est pire qu\'ouvrir le projet en mode restreint. JetBrains Gateway fonctionne très probablement de la même façon ; ce n\'est pas vérifié. Pour les serveurs de langage et un débogueur avec les paquets de la VM, utilise [`agent-vm code`](#edit-with-the-vm-s-tools).',
+              'Ne branche pas VS Code Remote-SSH ou open-remote-ssh sur une VM d\'agent. Ils font tourner un serveur dans la VM, que contrôle root dans la VM, et l\'éditeur sur ta machine lui fait confiance. La page de Remote-SSH chez Microsoft le dit : « a compromised remote could use the VS Code Remote connection to execute code on your local machine », et c\'est voulu. Des articles publics le montrent ouvrant un terminal sur l\'hôte et y lançant des commandes. Cela supprime la frontière que pose agent-vm, ce qui est pire qu\'ouvrir le projet en mode restreint. JetBrains Gateway ne se dit pas plus sûr : sa page sur le modèle de sécurité dit que ce que charge le backend arrive sur ta machine sans rien demander, que le backend y ouvre des liens (après confirmation) et décide de la version du client qu\'elle télécharge. Pour les serveurs de langage et un débogueur avec les paquets de la VM, utilise [`agent-vm code`](#edit-with-the-vm-s-tools).',
               'Pour des scripts, `scp` ou `rsync`, `agent-vm info` affiche l\'alias SSH comme `ssh_host`. Mets ces lignes en haut de `~/.ssh/config` : un `ForwardAgent yes` trouvé avant elles donnerait tes clés SSH à la VM. `--ssh-port` fixe le port pour les outils qui l\'enregistrent.',
             ],
             list: [],
@@ -582,7 +583,8 @@ export const fr: Dictionary = {
             title: 'Réseau et ports',
             paras: [
               'La VM atteint Internet et tous les services de la boucle locale de ta machine, à `192.168.5.2`. Lima redirige chaque port qu\'écoute une VM vers ton `127.0.0.1` s\'il est libre : une VM qui écoute la première sur 5432 reçoit les connexions, et les mots de passe, destinés à ton Postgres local. Le bloquer est [sur la feuille de route](#roadmap).',
-              'Chaque VM peut donc joindre l\'éditeur de toutes les autres. `agent-vm code` donne à chacune son propre mot de passe, créé dans cette VM, et son propre nom d\'hôte, `<nom-de-vm>.localhost` : les navigateurs rangent les cookies par nom d\'hôte et non par port, si bien qu\'à `127.0.0.1` n\'importe quelle page servie par une VM recevrait les sessions d\'éditeur des autres, et avec elles une porte d\'entrée. Chrome et Firefox résolvent `*.localhost` eux-mêmes ; Safari peut ne pas le faire, et `127.0.0.1` dans une fenêtre privée réservée à l\'éditeur fait alors la même chose.',
+              'Chaque VM peut donc joindre l\'éditeur de toutes les autres. `agent-vm code` donne à chacune son propre mot de passe, créé dans cette VM, et son propre nom d\'hôte, `<nom-de-vm>.localhost` : les navigateurs rangent les cookies par nom d\'hôte et non par port, si bien qu\'une page servie par une VM à `127.0.0.1` ne reçoit pas les sessions d\'éditeur des autres. Chrome et Firefox résolvent `*.localhost` eux-mêmes ; Safari peut ne pas le faire, et `127.0.0.1` dans une fenêtre privée réservée à l\'éditeur fait alors la même chose.',
+              'Cela arrête une page, pas une VM décidée. Une VM peut écouter sur un port que Lima transfère vers ta machine et envoyer ton navigateur au nom d\'hôte d\'une autre VM sur ce port : le navigateur lui remet la session de cet éditeur, que la VM peut utiliser sur le port de l\'éditeur, avec ses terminaux. Tenir les VM à l\'écart les unes des autres demande une isolation réseau, qu\'agent-vm n\'a pas encore ([feuille de route](#roadmap)). D\'ici là, arrête `agent-vm code` (Ctrl-C) quand tu ne t\'en sers pas, et considère qu\'un éditeur est joignable par chaque VM qui tourne.',
             ],
             list: [],
             code: '',

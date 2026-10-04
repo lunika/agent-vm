@@ -3,7 +3,8 @@
 # Run in the VM before the editor starts, with the candidate ports as
 # arguments. Prints `missing` without code-server, else its config file and
 # password, the port of an editor of this VM already running, and which
-# candidates something in the VM listens on.
+# candidates something in the VM listens on, whatever it speaks (ss; without
+# it, curl, any answer but a refused connection, the VM's proxy bypassed).
 #
 # The password is made here, in the VM, on first use, never in the base:
 # every VM is a copy of the base disk, and one VM knowing another's password
@@ -23,19 +24,30 @@ echo "config=$cfg"
 echo "password=$(sed -n "s/^password: //p" "$cfg")"
 pgrep -u "$(id -u)" -af -- "--config $cfg" \
   | sed -n "s/.*--bind-addr 127\.0\.0\.1:\([0-9]*\).*/running=\1/p" | head -n 1
-for p in "$@"; do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$p/" && echo "listening=$p"
-done
+if command -v ss >/dev/null 2>&1; then
+  open=" $(ss -Hltn 2>/dev/null | awk "{ n = split(\$4, a, \":\"); printf \"%s \", a[n] }")"
+  for p in "$@"; do
+    case "$open" in *" $p "*) echo "listening=$p" ;; esac
+  done
+else
+  for p in "$@"; do
+    curl -s -o /dev/null --noproxy "*" --max-time 1 "http://127.0.0.1:$p/"
+    [ $? -eq 7 ] || echo "listening=$p"
+  done
+fi
 exit 0
 '
 
-# Ten host ports for <vm>'s editor, from its name: the same on every start,
-# so the browser finds the saved password at the same address.
+# Ten host ports for <vm>'s editor, from 20000 to 29999, from its name: the
+# same on every start, so the browser finds the saved password at the same
+# address while the first is free. VM names end with a hash (see
+# _agent_vm_name): its last four digits start the ten, anywhere in the range,
+# so two VMs rarely start at the same port.
 _agent_vm_code_ports() {
-  local h base i
-  h="$(printf '%s' "$1" | _agent_vm_sha256 | cut -c1-4)"
+  local h="${1: -4}" base i
+  [[ "$h" =~ ^[0-9a-f]{4}$ ]] || h="$(printf '%s' "$1" | _agent_vm_sha256 | cut -c1-4)"
   [[ "$h" =~ ^[0-9a-f]{4}$ ]] || return 1
-  base=$((20000 + (16#$h % 1000) * 10))
+  base=$((20000 + 16#$h % 9991))
   for i in 0 1 2 3 4 5 6 7 8 9; do printf '%s ' $((base + i)); done
 }
 
@@ -58,12 +70,12 @@ _agent_vm_host_port_open() {
   (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
 
-# The editor's <url> on <port>, its <password>, and a last line <note>, in a
-# box. Safari leaves *.localhost to macOS, which may not resolve it:
-# 127.0.0.1 then, in a window of its own.
+# The address of <vm>'s editor on <port>, its <password>, and a last line
+# <note>, in a box. Safari leaves *.localhost to macOS, which may not resolve
+# it: 127.0.0.1 then, in a window of its own.
 _agent_vm_code_say() {
   {
-    echo "  Address:   $1"
+    echo "  Address:   http://$(_agent_vm_code_host "$1"):$2/"
     echo "  Password:  $3"
     if [[ "$(uname -s)" == Darwin ]]; then
       echo ""
@@ -87,8 +99,7 @@ _agent_vm_code() {
 }
 
 _agent_vm_code_session() {
-  local vm_name="$1" host_dir="$2" ports out line cfg="" pw="" running="" listening=" " port="" p
-  local url want_tty="" st=0
+  local vm_name="$1" host_dir="$2" ports out line cfg="" pw="" running="" port="" p want_tty=""
   ports="$(_agent_vm_code_ports "$vm_name")" || {
     echo "Error: cannot hash the VM name: install shasum or sha256sum." >&2
     return 1
@@ -108,7 +119,6 @@ _agent_vm_code_session() {
       config=*)    cfg="${line#config=}" ;;
       password=*)  pw="${line#password=}" ;;
       running=*)   running="${line#running=}" ;;
-      listening=*) listening="$listening${line#listening=} " ;;
     esac
   done <<< "$out"
   # Printed to the terminal: nothing the VM wrote may carry escape sequences.
@@ -118,15 +128,14 @@ _agent_vm_code_session() {
   fi
 
   if [[ -n "$running" ]]; then
-    url="http://$(_agent_vm_code_host "$vm_name"):$running/"
-    _agent_vm_code_say "$url" "$running" "$pw" "The editor of VM '$vm_name' already runs, from another terminal."
+    _agent_vm_code_say "$vm_name" "$running" "$pw" "The editor of VM '$vm_name' already runs, from another terminal."
     return 0
   fi
 
   # The first port free both here and in the VM: Lima forwards the VM's port
   # to the same one here, and only when nothing holds it.
   for p in $ports; do
-    [[ "$listening" == *" $p "* ]] && continue
+    _agent_vm_has_line "$out" "listening=$p" && continue
     _agent_vm_host_port_open "$p" && continue
     port="$p"
     break
@@ -136,23 +145,22 @@ _agent_vm_code_session() {
     return 1
   fi
 
-  url="http://$(_agent_vm_code_host "$vm_name"):$port/"
-  _agent_vm_code_say "$url" "$port" "$pw" "The password is kept in the VM, in $cfg. Ctrl-C stops the editor."
+  _agent_vm_code_say "$vm_name" "$port" "$pw" "The password is kept in the VM, in $cfg. Ctrl-C stops the editor."
   # A terminal for Ctrl-C to reach code-server: without one, it would keep
   # running in the VM once this command ends.
   [[ -t 0 && -t 1 ]] && want_tty=1
   # Bound to the VM's loopback, which Lima forwards to this machine's only.
-  # The cookie suffix keeps sessions apart at 127.0.0.1, where two editors
-  # would overwrite each other's cookie. --disable-proxy: no route from the
-  # browser to the VM's other ports, and the proxy is where CVE-2025-47269 was.
-  # The --vscode-option ones reach the VS Code server inside: no experiments,
-  # and the built-in Copilot Chat never loads (it updates itself otherwise).
-  # The settings written at setup do the rest (agent-vm.setup.sh).
-  # Claude Code's login pages open without the link protection prompt:
-  # these paths only, matched by segment (code-server 4.100+).
-  # VSCODE_PROXY_URI: links to localhost:<port> (or 127.0.0.1, 0.0.0.0) open
-  # at localhost:<port> here, where Lima forwards the VM's ports, instead of
-  # code-server's /proxy/<port>/, which --disable-proxy turns off.
+  # The cookie suffix keeps sessions apart at 127.0.0.1. --disable-proxy: no
+  # route from the browser to the VM's other ports; VSCODE_PROXY_URI sends a
+  # link to localhost:<port> to that port here instead. The --vscode-option
+  # ones: no experiments, and the built-in Copilot Chat never loads. Claude
+  # Code's login pages open without the link prompt, those paths only.
+  #
+  # Not a boundary between VMs: any VM can listen on a port Lima forwards to
+  # this machine, and a page it serves can send the browser, with this
+  # editor's cookie, to a host name it chose. Every VM can reach every
+  # other's editor; keeping them apart needs network isolation, which
+  # agent-vm does not have yet.
   _agent_vm_lima_run "$vm_name" "$host_dir" "$want_tty" \
     'VSCODE_PROXY_URI=http://localhost:{{port}}/' code-server \
     --config "$cfg" \
@@ -168,6 +176,5 @@ _agent_vm_code_session() {
     --link-protection-trusted-domains https://platform.claude.com/oauth \
     --vscode-option disable-experiments \
     --vscode-option disable-extension=GitHub.copilot-chat \
-    "$host_dir" || st=$?
-  return "$st"
+    "$host_dir"
 }

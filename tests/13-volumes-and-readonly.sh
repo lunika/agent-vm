@@ -291,6 +291,30 @@ printf '%s:/mnt/s:rw\n%s:%s:rw\n%s:/mnt/ok:rw\n' "$HOME/.agent-vm" "$SB/vol-ok" 
 vols_err="$(_agent_vm_build_mounts_json agent-vm-t "$PROJ" 2>&1 >/dev/null)"
 vols="$(_agent_vm_build_mounts_json agent-vm-t "$PROJ" 2>/dev/null)"
 case "$vols_err" in *"'$HOME/.agent-vm' (from ~/.agent-vm/volumes) is, or contains, agent-vm's state"*) pass "volumes: agent-vm's state is refused" ;; *) fail "volumes: state: $vols_err" ;; esac
-case "$vols_err" in *"Mount destination '$(dirname "$PROJ")' (from ~/.agent-vm/volumes) would cover the project"*) pass "volumes: a destination above the project is refused" ;; *) fail "volumes: cover: $vols_err" ;; esac
+case "$vols_err" in *"would be mounted at $(dirname "$PROJ"), which covers the project"*) pass "volumes: a destination above the project is refused" ;; *) fail "volumes: cover: $vols_err" ;; esac
 check "volumes: only the sound entry is mounted" "$(printf '%s' "$vols" | grep -o '"mountPoint"' | wc -l | tr -d ' ')" "2"
-rm -rf "$SB/vol-ok" "$HOME/.agent-vm/volumes"
+# Mounted where it is, without a destination: the parent covers the project,
+# and the project itself would be merged into its share by Lima. Spellings
+# that are the same place, and two entries at one place, likewise.
+# A project of its own, under a folder holding nothing else.
+P2="$SB/cov/proj"
+mkdir -p "$P2" "$SB/vol-ok" "$SB/vol-ok2"
+printf '%s:ro\n%s\n%s:%s/./x/..//:rw\n%s:/mnt/d:ro\n%s:/mnt/d/:rw\n' \
+  "$SB/cov" "$P2" "$SB/vol-ok" "$P2" "$SB/vol-ok" "$SB/vol-ok2" > "$HOME/.agent-vm/volumes"
+vols_err="$(_agent_vm_volume_entries "$P2" 2>&1 >/dev/null)"
+vols="$(_agent_vm_volume_entries "$P2" 2>/dev/null)"
+check "volumes: covering the project or merged with another, whatever the spelling: all refused" \
+  "$(printf '%s\n' "$vols_err" | grep -c 'covers the project')/$(printf '%s\n' "$vols_err" | grep -c 'as an entry before it')" "3/1"
+check "volumes: the first at a place is kept, its destination normalized" "$vols" "$SB/vol-ok|/mnt/d|ro|$SB/vol-ok:/mnt/d:ro"
+rm -rf "$SB/vol-ok" "$SB/vol-ok2" "$SB/cov" "$HOME/.agent-vm/volumes"
+# A repository's own folder: refused writable, where the VM would write its
+# hooks and config, not read-only.
+mkdir -p "$SB/bare.git/objects" "$SB/bare.git/refs" && : > "$SB/bare.git/HEAD"
+printf '%s:/mnt/b:rw\n' "$SB/bare.git" > "$HOME/.agent-vm/volumes"
+case "$(_agent_vm_volume_entries "$PROJ" 2>&1)" in *"a git repository's own folder"*) pass "volumes: a bare repository, writable: refused" ;; *) fail "volumes: bare rw: $(_agent_vm_volume_entries "$PROJ" 2>&1)" ;; esac
+printf '%s:/mnt/b:ro\n' "$SB/bare.git" > "$HOME/.agent-vm/volumes"
+check "volumes: read-only: kept" "$(_agent_vm_volume_entries "$PROJ" 2>/dev/null)" "$SB/bare.git|/mnt/b|ro|$SB/bare.git:/mnt/b:ro"
+rm -rf "$SB/bare.git" "$HOME/.agent-vm/volumes"
+mkdir -p "$PROJ/inner.git/objects" "$PROJ/inner.git/refs" && : > "$PROJ/inner.git/HEAD"
+check "a bare repository as the project" "$(refused "$PROJ/inner.git")" "refused"
+rm -rf "$PROJ/inner.git"

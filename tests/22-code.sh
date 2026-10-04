@@ -14,8 +14,36 @@ check "host name: the VM's, lowercased" "$(_agent_vm_code_host agent-vm-My-Proj-
 long="agent-vm-$(printf 'x%.0s' $(seq 1 80))-0a1b2c3d"
 check "host name: a DNS label, the hash kept" \
   "$(_agent_vm_code_host "$long" | sed 's/\.localhost$//' | awk '{ print length($0) <= 63, substr($0, length($0) - 8) }')" "1 -0a1b2c3d"
+check "the ten start at the last digits of the name's hash" "$(_agent_vm_code_ports agent-vm-a-0000270f)" \
+  "20008 20009 20010 20011 20012 20013 20014 20015 20016 20017 "
 check "another VM, other ports" \
-  "$([ "$(_agent_vm_code_ports agent-vm-other-00000000)" != "$ports" ] && echo differ)" "differ"
+  "$([ "$(_agent_vm_code_ports agent-vm-a-00000001)" != "$(_agent_vm_code_ports agent-vm-b-00000002)" ] && echo differ)" "differ"
+
+# Which candidates something in the VM listens on, run as the VM does: any
+# protocol (ss), or, without ss, any answer but a refused connection, never
+# through the VM's proxy.
+if command -v zsh >/dev/null 2>&1; then
+  mkdir -p "$SB/prep-bin" "$SB/prep-home"
+  printf '#!/bin/sh\nexit 0\n' > "$SB/prep-bin/code-server"
+  printf '#!/bin/sh\nexit 1\n' > "$SB/prep-bin/pgrep"
+  printf '#!/bin/sh\nprintf "LISTEN 0 4096 0.0.0.0:20001 0.0.0.0:*\\nLISTEN 0 128 [::]:20002 [::]:*\\n"\n' > "$SB/prep-bin/ss"
+  printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --noproxy ] && np=1; done\ncase "$*" in *:20000/*) exit 7 ;; *:20001/*) [ -n "$np" ] && exit 56 ;; esac\nexit 7\n' > "$SB/prep-curl"
+  chmod +x "$SB/prep-bin/"* "$SB/prep-curl"
+  prep() { HOME="$SB/prep-home" PATH="$1:$PATH" zsh -c "$_AGENT_VM_CODE_PREP" agent-vm-code 20000 20001 20002 2>/dev/null | grep '^listening=' | tr '\n' ' '; }
+  check "prep: what ss lists, whatever it speaks" "$(prep "$SB/prep-bin")" "listening=20001 listening=20002 "
+  rm "$SB/prep-bin/ss"
+  mkdir -p "$SB/prep-nossbin"
+  for t in sh awk sed grep cat od tr id mkdir head hostname; do
+    ln -sf "$(command -v "$t")" "$SB/prep-nossbin/$t" 2>/dev/null
+  done
+  cp "$SB/prep-bin/"* "$SB/prep-nossbin/"
+  cp "$SB/prep-curl" "$SB/prep-nossbin/curl"
+  prep_noss() { HOME="$SB/prep-home" http_proxy=http://127.0.0.1:9/ PATH="$SB/prep-nossbin" "$(command -v zsh)" -c "$_AGENT_VM_CODE_PREP" agent-vm-code 20000 20001 2>/dev/null | grep '^listening=' | tr '\n' ' '; }
+  check "prep without ss: a port that answers, not through the proxy" "$(prep_noss)" "listening=20001 "
+  rm -rf "$SB/prep-bin" "$SB/prep-nossbin" "$SB/prep-home" "$SB/prep-curl"
+else
+  printf '  skip the editor prep run (zsh is not installed)\n'
+fi
 
 if _agent_vm_host_port_open "$first"; then
   printf '  skip code launch tests (port %s is taken on this machine)\n' "$first"
@@ -38,9 +66,13 @@ else
   check "the Safari fallback, on macOS only" \
     "$(uname() { echo Linux; }; _agent_vm_code_say u 20000 pw 2>&1 | grep -c 127.0.0.1; uname() { echo Darwin; }; _agent_vm_code_say u 20000 pw 2>&1 | grep -c 'http://127.0.0.1:20000/')" \
     "$(printf '0\n1')"
-  # The user opens it: nothing is started on this machine.
-  grep -q 'xdg-open\|open "\$url"\|start "\$url"' "$AGENT_VM_SCRIPT_DIR/lib/code.sh" \
-    && fail "the browser is opened" || pass "the browser is not opened"
+  # The user opens it: no opener is run on this machine.
+  mkdir -p "$SB/openers"
+  for o in open xdg-open start; do printf '#!/bin/sh\n: > "%s/opened"\n' "$SB" > "$SB/openers/$o"; chmod +x "$SB/openers/$o"; done
+  rm -f "$SB/opened"
+  PATH="$SB/openers:$PATH" rec code >/dev/null
+  [ -e "$SB/opened" ] && fail "the browser is opened" || pass "the browser is not opened"
+  rm -rf "$SB/openers" "$SB/opened"
 
   AGENT_VM_TEST_CODE_PREP="config=/c.yaml\npassword=pw\nlistening=$first\n" rec code >/dev/null
   rec_has "--bind-addr 127.0.0.1:$((first + 1))" \

@@ -47,7 +47,10 @@ fi
 SB="$(mktemp -d /tmp/agent-vm-e2e.XXXXXX)"
 export AGENT_VM_STATE_DIR="$SB/state"
 export LIMA_HOME="$SB/lima"
-PROJ="$SB/project"
+# In a folder of its own: a volume holding it must not hold the state
+# directories, which agent-vm refuses to share.
+WORK="$SB/work"
+PROJ="$WORK/project"
 mkdir -p "$AGENT_VM_STATE_DIR" "$LIMA_HOME" "$PROJ"
 git -C "$PROJ" init -q
 
@@ -238,11 +241,11 @@ section "--readonly covers every share, not just the project"
 # =============================================================================
 # A writable volume that contains the project is a second path to the same
 # files, and the hypervisor enforces read-only per share. Under --readonly it
-# has to be read-only as well. $SB is the project's parent.
+# has to be read-only as well. $WORK is the project's parent.
 #
 # Volumes are mounted when a VM is created, so --reset: on the existing VM the
 # volume would simply be absent, and the write would fail for that reason.
-printf '%s:/mnt/sb:rw\n' "$SB" > "$AGENT_VM_STATE_DIR/volumes"
+printf '%s:/mnt/sb:rw\n' "$WORK" > "$AGENT_VM_STATE_DIR/volumes"
 ro_run --reset run sudo sh -c \
   "test -d /mnt/sb/project || exit 3; echo x > /mnt/sb/project/via-volume.txt"
 via_status=$?
@@ -269,7 +272,7 @@ else
   fail "the project stayed read-only after --readonly was dropped"
 fi
 if (cd "$PROJ" && "$AGENT_VM" run sh -c "echo back > /mnt/sb/volume-again.txt") \
-   && [ -e "$SB/volume-again.txt" ]; then
+   && [ -e "$WORK/volume-again.txt" ]; then
   pass "and an rw volume is writable again"
 else
   fail "the rw volume stayed read-only after --readonly was dropped"

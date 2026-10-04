@@ -47,14 +47,7 @@ _agent_vm_ask_choice() {
     printf '    %s) %s\n' "$i" "$reply" >&2
     i=$((i + 1))
   done
-  while true; do
-    reply="$(_agent_vm_ask "$prompt" "$default")"
-    if [[ "$reply" =~ ^[1-9][0-9]*$ && "$reply" -le $# ]]; then
-      printf '%s\n' "$reply"
-      return 0
-    fi
-    printf '  (a number from 1 to %s; got: %s)\n' "$#" "$reply" >&2
-  done
+  _agent_vm_ask_int "$prompt" "$default" "$#"
 }
 
 # Can a question be asked, and seen? A terminal to read the answer from, and
@@ -148,17 +141,22 @@ _agent_vm_box() {
   } >&2
 }
 
-# Prompt for a positive integer with default. Re-prompts on invalid input.
-# Used for disk/memory/cpus where a typo (e.g. "10G") would otherwise produce
-# a cryptic limactl error several seconds later.
+# Prompt for a positive integer with default, at most <max> when given.
+# Re-prompts on invalid input. Used for disk/memory/cpus where a typo (e.g.
+# "10G") would otherwise produce a cryptic limactl error several seconds
+# later, and for the menus of _agent_vm_ask_choice.
 _agent_vm_ask_int() {
-  local prompt="$1" default="$2" reply
+  local prompt="$1" default="$2" max="${3:-}" reply
   while true; do
     reply=$(_agent_vm_ask "$prompt" "$default")
-    if [[ "$reply" =~ ^[1-9][0-9]*$ ]]; then
+    if [[ "$reply" =~ ^[1-9][0-9]*$ ]] && [[ -z "$max" || "$reply" -le "$max" ]]; then
       printf '%s\n' "$reply"
       return 0
     fi
-    printf '  (must be a positive integer, e.g. 10; got: %s)\n' "$reply" >&2
+    if [[ -n "$max" ]]; then
+      printf '  (a number from 1 to %s; got: %s)\n' "$max" "$reply" >&2
+    else
+      printf '  (must be a positive integer, e.g. 10; got: %s)\n' "$reply" >&2
+    fi
   done
 }

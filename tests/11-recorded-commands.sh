@@ -3,19 +3,25 @@ section "commands against a recording limactl"
 # =============================================================================
 # One stub for the sections below. It logs every call, lists the base template
 # and the VM named by AGENT_VM_TEST_VM, and reports its mount type as
-# virtiofs (AGENT_VM_TEST_MOUNTTYPE to change it) on vz (AGENT_VM_TEST_VMTYPE). With AGENT_VM_TEST_CLONED set,
-# that VM only exists once `clone` has created the file. AGENT_VM_TEST_STOPPED
-# lists it as stopped, as does a `stop` until the next `start`, and
-# AGENT_VM_TEST_RO makes the project write probe fail, as a read-only share
-# would. AGENT_VM_TEST_STOP_FAIL makes `stop` leave it running.
+# virtiofs (AGENT_VM_TEST_MOUNTTYPE to change it) on vz
+# (AGENT_VM_TEST_VMTYPE). Lima's config for the VM holds the mounts last set
+# by `edit` in the run, else those of agent-vm's record;
+# AGENT_VM_TEST_LIVE_UNPROTECTED adds a share without read-only names to
+# them, as Lima's _config would. With AGENT_VM_TEST_CLONED set, that VM only
+# exists once `clone` has created the file. AGENT_VM_TEST_STOPPED lists it as
+# stopped, as does a `stop` until the next `start`, and AGENT_VM_TEST_RO
+# makes the project write probe fail, as a read-only share would.
+# AGENT_VM_TEST_STOP_FAIL makes `stop` leave it running.
 # AGENT_VM_TEST_SSHFS_FAIL fails the sshfs install of a 0.1.0 VM.
 # AGENT_VM_TEST_RUNTIME_FOUND makes the probe find the project's runtime
-# script. AGENT_VM_TEST_PROBE_LOST makes its write succeed in the VM without
-# reaching the project, as when the share is not mounted. What is piped into the env push goes to AGENT_VM_TEST_STDIN.
-# `validate` answers like stock Lima 2.2 does to readonlyNames, or, while the
-# file $PROTECTS exists, like a Lima that has it (both messages copied from
-# the real binaries). AGENT_VM_TEST_VALIDATE_SILENT makes it accept the file
-# without a word, an answer agent-vm cannot read.
+# script. AGENT_VM_TEST_PROBE_LOST makes the project's share look gone: the
+# guest does not see the file this machine put there. What is piped into the
+# env push goes to AGENT_VM_TEST_STDIN.
+# `validate` answers the probe of _agent_vm_lima_protects_git like stock Lima
+# 2.2 does, or, while the file $PROTECTS exists, like the fork
+# (v2.3.0-sylvinus.2): both messages copied from the real binaries.
+# AGENT_VM_TEST_VALIDATE_SILENT makes it accept the file without a word, an
+# answer agent-vm cannot read.
 REC="$SB/rec.log"
 PROTECTS="$SB/lima-protects"
 cat > "$SB/bin/limactl" <<'STUB'
@@ -27,7 +33,7 @@ case "$1" in
   validate)
     [ -z "${AGENT_VM_TEST_VALIDATE_SILENT:-}" ] || exit 0
     if [ -e "${AGENT_VM_TEST_PROTECTS:-/nonexistent}" ]; then
-      echo 'level=fatal msg="failed to validate YAML file `probe.yaml`: field `mounts[*].sshfs.readonlyNames` requires `mountType` to be `reverse-sshfs`"' >&2
+      echo 'level=fatal msg="failed to validate YAML file `probe.yaml`: field `mounts[0].sshfs.readonlyNames` must contain file names, got `a/b`"' >&2
       exit 1
     fi
     echo 'level=warning msg="Non-strict YAML detected; please check for typos" error="[3:158] unknown field \"readonlyNames\""' >&2
@@ -35,7 +41,19 @@ case "$1" in
   clone)
     [ -z "${AGENT_VM_TEST_CLONE_FAIL:-}" ] || { echo 'level=fatal msg="clone boom"' >&2; exit 1; }
     [ -n "${AGENT_VM_TEST_CLONED:-}" ] && touch "$AGENT_VM_TEST_CLONED" ;;
-  edit) [ -z "${AGENT_VM_TEST_EDIT_FAIL:-}" ] || { echo 'level=fatal msg="edit boom"' >&2; exit 1; } ;;
+  # Lima's config then holds the mounts set, until the next run (see rec).
+  edit)
+    [ -z "${AGENT_VM_TEST_EDIT_FAIL:-}" ] || { echo 'level=fatal msg="edit boom"' >&2; exit 1; }
+    expr="" prev=""
+    for a in "$@"; do [ "$prev" = --set ] && expr="$a"; prev="$a"; done
+    case "$expr" in
+      *".mounts = "*)
+        case "$expr" in
+          *'.mountType = "reverse-sshfs"'*) t=reverse-sshfs ;;
+          *) t="${AGENT_VM_TEST_MOUNTTYPE:-virtiofs}" ;;
+        esac
+        printf '%s %s\n' "$t" "$(printf '%s' "${expr#*.mounts = }" | tr -d ' ')" > "$AGENT_VM_TEST_REC.live" ;;
+    esac ;;
   list)
     case "$*" in
       *"{{.Name}} {{.Config.SSH.LocalPort}}"*)
@@ -48,12 +66,22 @@ case "$1" in
       # them, unless AGENT_VM_TEST_LIVE_UNPROTECTED adds one set by hand.
       *"{{json .Config.Mounts}}"*)
         r="$HOME/.agent-vm/.agent-vm-mounts-$AGENT_VM_TEST_VM"
-        if [ -f "$r" ] && grep -q readonlyNames "$r"; then
-          m="$(tr -d ' ' < "$r")"
-          [ -z "${AGENT_VM_TEST_LIVE_UNPROTECTED:-}" ] || m="${m%]},{\"location\":\"/elsewhere\",\"writable\":true}]"
-          echo "reverse-sshfs $m"
+        extra() {
+          [ -n "${AGENT_VM_TEST_LIVE_UNPROTECTED:-}" ] || { printf '%s\n' "$1"; return; }
+          case "$1" in
+            null|"[]") echo '[{"location":"/elsewhere","writable":true}]' ;;
+            *) printf '%s\n' "${1%]},{\"location\":\"/elsewhere\",\"writable\":true}]" ;;
+          esac
+        }
+        if [ -f "$AGENT_VM_TEST_REC.live" ]; then
+          read -r t m < "$AGENT_VM_TEST_REC.live"
+          echo "${AGENT_VM_TEST_VMTYPE:-vz} ${AGENT_VM_TEST_LIVE_MOUNTTYPE:-$t} $(extra "$m")"
+        elif [ -f "$r" ] && grep -q readonlyNames "$r"; then
+          echo "${AGENT_VM_TEST_VMTYPE:-vz} ${AGENT_VM_TEST_LIVE_MOUNTTYPE:-reverse-sshfs} $(extra "$(tr -d ' ' < "$r")")"
+        elif [ -f "$r" ]; then
+          echo "${AGENT_VM_TEST_VMTYPE:-vz} ${AGENT_VM_TEST_MOUNTTYPE:-virtiofs} $(extra "$(tr -d ' ' < "$r")")"
         else
-          echo "${AGENT_VM_TEST_MOUNTTYPE:-virtiofs} [{\"location\":\"/x\",\"writable\":true}]"
+          echo "${AGENT_VM_TEST_VMTYPE:-vz} ${AGENT_VM_TEST_MOUNTTYPE:-virtiofs} $(extra null)"
         fi ;;
       *"{{.VMType}}"*) echo "${AGENT_VM_TEST_VMTYPE:-vz} ${AGENT_VM_TEST_MOUNTTYPE:-virtiofs}" ;;
       *"{{.CPUs}}"*"{{.Disk}}"*) listed && echo "$AGENT_VM_TEST_VM|1|3221225472|10737418240" ;;
@@ -79,8 +107,8 @@ case "$1" in
           [ -n "${AGENT_VM_TEST_ENV_FAIL:-}" ] || echo env-ok
           [ -z "${AGENT_VM_TEST_RUNTIME_FOUND:-}" ] || echo runtime-found ;;
         esac
-        [ -z "${AGENT_VM_TEST_RO:-}" ] || exit 1
-        [ -z "${AGENT_VM_TEST_PROBE_LOST:-}" ] || echo probe-written ;;
+        [ -n "${AGENT_VM_TEST_PROBE_LOST:-}" ] || echo share-ok
+        [ -z "${AGENT_VM_TEST_RO:-}" ] || exit 1 ;;
       *"exec "*" -s"*) cat >> "${AGENT_VM_TEST_STDIN:-/dev/null}" ;;
       # The editor's prep (lib/code.sh): AGENT_VM_TEST_CODE_PREP is its answer.
       *"agent-vm-code "*)
@@ -108,9 +136,11 @@ _agent_vm_check_windows_prereqs() { return 0; }
 if _agent_vm_on_windows; then
   _agent_vm_unprotected_mount_is_sshfs() { return 1; }
 fi
+# Each run starts from the record the test wrote: Lima's config follows it
+# until an edit in the run.
 rec() {
   : > "$REC"
-  rm -f "$REC.stopped"
+  rm -f "$REC.stopped" "$REC.live"
   ( cd "$PROJ" || exit 1
     export AGENT_VM_TEST_REC="$REC" AGENT_VM_TEST_VM="$PV" AGENT_VM_TEST_PROTECTS="$PROTECTS"
     agent-vm "$@" </dev/null 2>&1 )

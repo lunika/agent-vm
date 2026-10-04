@@ -302,9 +302,10 @@ EOF
         mcp-chrome)     install_mcp_chrome=1 ;;
         mcp-playwright) install_mcp_playwright=1 ;;
         code-server)    install_code_server=1 ;;
-        code-claude)    install_code_claude=1 ;;
-        code-codex)     install_code_codex=1 ;;
-        code-vibe)      install_code_vibe=1 ;;
+        # An extension needs the editor.
+        code-claude)    install_code_claude=1 install_code_server=1 ;;
+        code-codex)     install_code_codex=1 install_code_server=1 ;;
+        code-vibe)      install_code_vibe=1 install_code_server=1 ;;
         *)
           echo "Unknown preinstall name: $f (names are lowercase)" >&2
           echo "Valid: python, node, ruby, rust, golang, docker, chromium, gh, claude, opencode, codex, vibe, pi, mcp-chrome, mcp-playwright, code-server, code-claude, code-codex, code-vibe, default, all, none" >&2
@@ -463,11 +464,6 @@ EOF
   echo "Running security checks..."
   [[ -n "$declined_protection" ]] || _agent_vm_offer_git_protection
 
-  # An extension needs the editor.
-  if [[ "$install_code_claude$install_code_codex$install_code_vibe" == *1* ]]; then
-    install_code_server=1
-  fi
-
   # --preinstall can name what needs node without node.
   local node_reason
   node_reason="$(_agent_vm_node_needed_by)"
@@ -519,8 +515,8 @@ EOF
   echo "Starting base VM (the first run downloads a Debian image)..."
   if ! _agent_vm_windowed "$setup_log" limactl start "$AGENT_VM_TEMPLATE" </dev/null; then
     echo "Error: Failed to start base VM. Full log: $setup_log" >&2
-    echo "Lima's own log: $(_agent_vm_lima_home)/$AGENT_VM_TEMPLATE/ha.stderr.log" >&2
-    _agent_vm_windows_start_hint "$setup_log" "$(_agent_vm_lima_home)/$AGENT_VM_TEMPLATE/ha.stderr.log"
+    echo "Lima's own log: $(_agent_vm_ha_log "$AGENT_VM_TEMPLATE")" >&2
+    _agent_vm_windows_start_hint "$setup_log" "$(_agent_vm_ha_log "$AGENT_VM_TEMPLATE")"
     return 1
   fi
 

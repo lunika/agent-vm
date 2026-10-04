@@ -48,20 +48,19 @@ _agent_vm_unmountable_path() {
   fi
 }
 
-# Prints why <dir> must not be shared with a VM ("is, or contains, ..." or "is
-# inside ..."), and returns 0, when it is or contains your home directory
-# (dotfiles, SSH keys, every other project), or is, contains or is inside
-# agent-vm itself (the host runs its files), agent-vm's state (every VM's env)
-# or Lima's (the VMs' SSH key and disks, override.yaml adding mounts to every
-# VM). A project inside the home directory is what is expected. Returns 1
-# when it is none of them.
-# Compared as physical paths: a share is the directory a path resolves to.
-# And whatever the case where the file system ignores it: `cd /c/users/me`
-# reaches the home directory in Git Bash, which keeps the spelling typed.
+# Prints why the project <dir> must not be shared with a VM, and returns 0,
+# when it is one of the locations below (_agent_vm_unsafe_location) or a
+# repository's own folder (_agent_vm_git_dir_share): the project is a
+# writable share. Returns 1 when it is neither.
 _agent_vm_unsafe_project() {
-  local dir p rp what
-  dir="$(CDPATH= cd -P -- "$1" 2>/dev/null && pwd)" || dir="$1"
-  dir="$(_agent_vm_fold "$dir")"
+  _agent_vm_unsafe_location "$1" || _agent_vm_git_dir_share "$1"
+}
+
+# The locations no share may reach, one per line, physical and folded (see
+# _agent_vm_unsafe_location), each after what it is and a tab. A caller
+# checking several paths sets _agent_vm_unsafe_refs to this once.
+_agent_vm_unsafe_ref_dirs() {
+  local p rp what
   for what in "your home directory" "agent-vm itself" "agent-vm's state" "Lima's state"; do
     case "$what" in
       "your home directory") p="$HOME" ;;
@@ -78,7 +77,27 @@ _agent_vm_unsafe_project() {
       p="${p%/}"
     fi
     [[ -n "$p" ]] || continue
-    p="$(_agent_vm_fold "$p")"
+    printf '%s\t%s\n' "$what" "$(_agent_vm_fold "$p")"
+  done
+}
+
+# Prints why <dir> must not be shared with a VM, writable or not ("is, or
+# contains, ..." or "is inside ..."), and returns 0, when it is or contains
+# your home directory (dotfiles, SSH keys, every other project), or is,
+# contains or is inside agent-vm itself (the host runs its files), agent-vm's
+# state (every VM's env) or Lima's (the VMs' SSH key and disks, override.yaml
+# adding mounts to every VM). A project inside the home directory is what is
+# expected. Returns 1 when it is none of them.
+# Compared as physical paths: a share is the directory a path resolves to.
+# And whatever the case where the file system ignores it: `cd /c/users/me`
+# reaches the home directory in Git Bash, which keeps the spelling typed.
+_agent_vm_unsafe_location() {
+  local dir what p refs="${_agent_vm_unsafe_refs:-}"
+  [[ -n "$refs" ]] || refs="$(_agent_vm_unsafe_ref_dirs)"
+  dir="$(CDPATH= cd -P -- "$1" 2>/dev/null && pwd)" || dir="$1"
+  dir="$(_agent_vm_fold "$dir")"
+  while IFS=$'\t' read -r what p; do
+    [[ -n "$p" ]] || continue
     case "${p%/}/" in
       "${dir%/}/"*)
         printf 'is, or contains, %s\n' "$what"
@@ -90,9 +109,26 @@ _agent_vm_unsafe_project() {
         printf 'is inside %s\n' "$what"
         return 0 ;;
     esac
+  done <<< "$refs"
+  return 1
+}
+
+# Prints why <dir> must not be a writable share, and returns 0, when it is a
+# repository's own folder or inside one: a .git or .hg (by name, as the SFTP
+# server matches them), or a bare repository (HEAD, objects/ and refs/, as git
+# finds one). The read-only names apply below a share's root, so such a share
+# is writable whole: hooks and config included.
+_agent_vm_git_dir_share() {
+  local dir a
+  dir="$(CDPATH= cd -P -- "$1" 2>/dev/null && pwd)" || dir="$1"
+  a="${dir%/}"
+  while [[ -n "$a" ]]; do
+    if [[ -f "$a/HEAD" && -d "$a/objects" && -d "$a/refs" ]]; then
+      printf 'is, or is inside, a git repository'"'"'s own folder (%s)\n' "$a"
+      return 0
+    fi
+    a="${a%/*}"
   done
-  # The read-only names apply below a share's root: a share that is a .git,
-  # or inside one, is writable whole.
   if _agent_vm_under_readonly_name "${dir#/}"; then
     printf 'is, or is inside, a folder git or Mercurial keeps its repository in (.git, .hg)\n'
     return 0
@@ -245,7 +281,8 @@ _agent_vm_cleanup_state() {
   rm -f "$AGENT_VM_STATE_DIR/.agent-vm-sshfs-${vm_name}"
   rm -f "$AGENT_VM_STATE_DIR/.agent-vm-term-${vm_name}"
   rm -f "$AGENT_VM_STATE_DIR/.agent-vm-file-mounts-${vm_name}"
-  rm -f "$AGENT_VM_STATE_DIR/.agent-vm-mounts-${vm_name}"
+  rm -f "$(_agent_vm_mounts_record "$vm_name")"
+  rm -f "$AGENT_VM_STATE_DIR/.agent-vm-sshfs-cache-${vm_name}"
   rm -f "$(_agent_vm_scratch_marker "$vm_name")"
   rm -rf "$AGENT_VM_STATE_DIR/file-mounts/${vm_name}"
   # Deleting the template retires the marker that says it is usable.
@@ -362,6 +399,7 @@ _agent_vm_migrate_0_1() {
     echo "$out" >&2
     return 1
   fi
+  _agent_vm_check_before_start "$vm_name" 1 || return 1
   echo "Starting VM '$vm_name' without shares to install sshfs..."
   if ! out=$(limactl start "$vm_name" 2>&1); then
     echo "Error: Failed to start VM '$vm_name' to install sshfs:" >&2

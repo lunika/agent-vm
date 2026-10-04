@@ -7,7 +7,7 @@ SCR="agent-vm-proj-scratch-00000000"
 SCR_CLONED="$SB/scr-cloned"
 sc() {
   : > "$REC"
-  rm -f "$REC.stopped" "$SCR_CLONED"
+  rm -f "$REC.stopped" "$REC.live" "$SCR_CLONED"
   ( cd "${SC_DIR:-$PROJ}" || exit 1
     export AGENT_VM_TEST_REC="$REC" AGENT_VM_TEST_VM="$SCR" AGENT_VM_TEST_PROTECTS="$PROTECTS" AGENT_VM_TEST_CLONED="$SCR_CLONED"
     _agent_vm_scratch_name() { echo "$SCR"; }
@@ -33,6 +33,12 @@ if [ -n "$d" ] && [ -n "$p" ] && [ "$d" -gt "$p" ]; then pass "then the VM is de
 case "$out" in *"Deleting scratch VM '$SCR'"*) pass "and it says so" ;; *) fail "no notice: $out" ;; esac
 grep -Eq "^(stop|delete|edit|start) $PV( |$)" "$REC" && fail "the folder's own VM was touched" || pass "the folder's own VM is left alone"
 [ -e "$(_agent_vm_scratch_marker "$SCR")" ] && fail "the run's record outlived it" || pass "nothing left recorded"
+[ -n "$(ls -A "$PROJ" | grep 'agent-vm-.*probe')" ] && fail "a probe file left in the folder" || pass "no probe file put in the folder"
+# Lima's _config giving every VM a share: a scratch VM would not share
+# nothing. Not started, and deleted.
+out="$(AGENT_VM_TEST_LIVE_UNPROTECTED=1 AGENT_VM_TEST_STOPPED=1 sc --scratch run true; echo "rc=$?")"
+case "$out" in *"shares agent-vm did not ask for"*"rc=1") pass "a share from Lima's _config stops it" ;; *) fail "scratch, _config: $out" ;; esac
+rec_has "start $SCR" && fail "scratch, _config: started anyway" || pass "and it is not started"
 
 # Before the deletion, asked when it can be: a no opens a shell in the VM,
 # and asks again on its exit. Yes, or an answer cut short, deletes. ANSWERS

@@ -141,17 +141,23 @@ where you stand.
 
 Before a VM boots with writable shares, agent-vm stops on what it cannot
 protect, and asks whether to go on (no by default, and when it cannot ask):
-a Lima without readonlyNames, hooks at the top of the project, git config or
-commands it names in files of the project, and git ignoring
-safe.bareRepository=explicit (which it offers to set: git would otherwise use
-a folder with HEAD, objects/ and refs/ as a repository, under any name). A
-VM that already runs gets the warnings only, and a restart when it lacks a
-protection; once stopped to boot again, it is asked like any other.
+a Lima without readonlyNames, hooks at the top of a share, git config,
+commands it names, or hooks linked to files, in the project or a writable
+volume, and git ignoring safe.bareRepository=explicit (which it offers to
+set: git would otherwise use a folder with HEAD, objects/ and refs/ as a
+repository, under any name). A VM that already runs gets the warnings only,
+and a restart when it lacks a protection; once stopped to boot again, it is
+asked like any other.
 'agent-vm info' lists what a start would ask
 (security_questions=).
 --unsafe-writable-git, or AGENT_VM_UNSAFE_WRITABLE_GIT=1 in your shell, leaves
 .git writable anyway, so the agent can commit in the project; a warning is
 printed on every run. Changing it applies when the VM is next started.
+
+The writable shares are served without sshfs's cache, so the VM never writes
+back a file as it was before you changed it. AGENT_VM_SSHFS_CACHE=1 in your
+shell turns the cache on, faster on many files (git status, find), at that
+risk, for 20 seconds. It applies when a VM is next started.
 
 Customization:
   ~/.agent-vm/env                   Shared env vars / tokens (dotenv-style;

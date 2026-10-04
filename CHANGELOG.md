@@ -16,32 +16,49 @@
   theme, GitHub Copilot disabled, no telemetry, no welcome page, tips,
   recommendations or experiments. The JSON schemas the editor validates
   files with (`package.json`, `tsconfig.json`...) are downloaded once by
-  `setup`: opening a file sends no request.
+  `setup`, in parallel, each stored under the URL the editor asks for (a
+  schema's references followed from its `$id`, as the editor does):
+  opening a file sends no request.
 - The editor's password is made in each VM on first use, never in the base,
   of which every VM is a copy, and printed. Each VM's editor is at
-  `http://<vm-name>.localhost:<port>/`, a port of its own from 20000 to
-  29999, the same on every start: browsers keep cookies per host name, not
-  per port, so at `127.0.0.1` a page served by any VM would get the session
-  of every editor, which logs into it. Safari may not resolve `*.localhost`:
-  then `127.0.0.1` in a private window kept for the editor. code-server's
-  port proxy is off: links to `localhost:<port>` open at that port on your
-  machine, where Lima forwards it. Claude Code's login pages open without the editor's
-  link prompt; other links still ask.
+  `http://<vm-name>.localhost:<port>/`, the first of ten ports from 20000 to
+  29999 picked from its name that is free, so the same on every start while
+  it is: browsers keep cookies per host name, not per port, so a page a VM
+  serves at `127.0.0.1` does not get the session of every editor. Safari may
+  not resolve `*.localhost`: then `127.0.0.1` in a private window kept for
+  the editor. code-server's port proxy is off: links to `localhost:<port>`
+  open at that port on your machine, where Lima forwards it. Claude Code's
+  login pages open without the editor's link prompt; other links still ask.
+- Not a boundary between VMs: a VM can listen on a port Lima forwards to
+  your machine and send your browser to another VM's editor host name on
+  it, getting that editor's session. Keeping VMs apart needs network
+  isolation, on the roadmap; until then, stop `agent-vm code` when not
+  using it.
 - With code-server picked in the wizard, the base gets 4 GB of memory
   instead of 3, unless `--memory` says otherwise.
 
 ### Changed
 
 - A command that is not in the VM (`agent-vm run foo`, or an agent not
-  installed) says so, with status 127, instead of `env`'s error.
-- The protected shares turn sshfs's cache off: with it, a file the host
-  changed showed as it was for up to 20 seconds, and an agent writing back
-  what it read undid the change. Existing VMs get it on their next start
-  from stopped.
-- A project share that is no longer mounted (sshfs died) is caught: the
-  write probe now checks that its file reached the host. The VM is restarted
+  installed) says so, with status 127, instead of `env`'s error. A path
+  (`./build.sh`) is still `env`'s to run, with its reason: a script without
+  +x is denied, status 126.
+- The protected writable shares turn sshfs's cache off: with it, a file the
+  host changed showed as it was for up to 20 seconds, and an agent writing
+  back what it read undid the change. `AGENT_VM_SSHFS_CACHE=1` in the shell
+  turns it back on, faster on many files (a repeated `git status` sends
+  about 20 times fewer requests). The read-only shares keep it. Existing VMs
+  get it on their next start from stopped.
+- A project share that is no longer mounted (sshfs died) is caught: the VM
+  must see a file this machine just put in the project. The VM is restarted
   with its shares, with a warning that what it wrote meanwhile is on its own
-  disk.
+  disk. No probe file is left anywhere, a `--scratch` folder included.
+- `agent-vm code` finds the ports something in the VM listens on with `ss`,
+  whatever it speaks, and never through the VM's HTTP proxy, which made
+  every port look taken.
+- A start reads `~/.agent-vm/volumes` and scans the repositories of each
+  share once: about 4 times fewer processes with a writable volume holding
+  many repositories.
 
 ### Security
 
@@ -51,19 +68,35 @@
   not.
 - A VM recorded as protected is checked against the shares Lima has for it:
   a share without the read-only names, set by hand or by Lima's `_config`,
-  makes it unprotected, and a stopped VM that keeps one is not started. A
-  running VM served by another `limactl` than the one on `PATH` (a stock
-  Lima started it) is not taken as protected either.
-- Hooks reached through symlinks: `.git/hooks` or `core.hooksPath` linked to
-  a folder of the project makes that folder read-only too, and a hook that
-  is a link to a file of the project is a risk to accept.
-- Repositories in writable `~/.agent-vm/volumes` get the same checks as the
-  project's: their hooks folders join the read-only names, and their config
-  naming commands in them is a risk to accept.
-- A `.git` or `.hg`, or a folder inside one, is refused as a project: the
-  read-only names apply below a share's root only. A volume is refused when
-  it would be refused as a project (agent-vm's state, Lima's, the home
-  directory), or when its destination covers the project.
+  makes it unprotected, and no boot (a first start, a repair, a restart for
+  `--readonly`, the 0.1.0 migration) happens with one; the error says which
+  share, or that the mount type is wrong. A VM that shares nothing
+  (`--scratch`, the migration) boots with no share at all. A running VM
+  served by another `limactl` build than the one on `PATH` (a stock Lima
+  started it) is not taken as protected either, by a start, by `--readonly`
+  or by `doctor`: on macOS the running binary is asked of `lsof`, which a
+  Homebrew link does not fool, and the same build reinstalled since is not
+  taken for another. `--readonly` is refused when Lima's `_config` gives the
+  VM a writable share.
+- What git on this machine runs from a share, found wherever it points:
+  hooks folders, hooks, commands and included config in the project, in a
+  writable volume, or pointing from one to another (`core.hooksPath` or
+  `core.fsmonitor` into a volume), and git's own global config kept in one.
+  A hooks folder becomes a read-only name; anything else is a risk to
+  accept. Every symlink on the way is followed, a link not there yet
+  included (the VM could create its target), and a link inside the
+  project on the way is protected as well. Writable volumes reached through
+  a symlink are searched, bare repositories in them get their folder's name
+  read-only, and more than 50 repositories in one share is said. A hook
+  linked to another inside its own read-only folder is no risk any more.
+  Names printed from the shares have their control characters made
+  visible.
+- A `.git` or `.hg`, a bare repository, or a folder inside one, is refused as
+  the project, and as a writable volume: the read-only names apply below a
+  share's root only. A volume is refused when it is, contains or is inside
+  agent-vm's state, Lima's or agent-vm itself, or contains the home folder,
+  read-only or not, and when it would be mounted at or above the project, or
+  where another volume is, whatever the spelling or with no destination.
 
 ## 0.2.0
 
@@ -314,7 +347,7 @@ has passwordless sudo, so anything enforced there is advisory at best.
   that save the port rather than an alias (#28). `0` goes back to a new port on
   each start. A port another agent-vm VM has is refused. `info` gains
   `ssh_host` and `ssh_config`: Lima's alias for the VM and the SSH config file
-  it keeps current. [The website](https://www.agent-vm.org/#connect-an-ide-over-ssh)
+  it keeps current. [The website](https://www.agent-vm.org/#ssh-from-your-machine)
   has the `~/.ssh/config` lines to use them, which keep the host's SSH agent out
   of the VM.
 - `curl -fsSL https://www.agent-vm.org/install.sh | sh` installs the latest

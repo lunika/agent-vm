@@ -51,6 +51,8 @@ INSTALL_CODE_SERVER="${AGENT_VM_INSTALL_CODE_SERVER:-0}"
 INSTALL_CODE_CLAUDE="${AGENT_VM_INSTALL_CODE_CLAUDE:-0}"
 INSTALL_CODE_CODEX="${AGENT_VM_INSTALL_CODE_CODEX:-0}"
 INSTALL_CODE_VIBE="${AGENT_VM_INSTALL_CODE_VIBE:-0}"
+# An extension needs the editor: `agent-vm setup` says so already, a run of
+# this script on its own may not.
 if [[ "$INSTALL_CODE_CLAUDE$INSTALL_CODE_CODEX$INSTALL_CODE_VIBE" == *1* ]]; then
   INSTALL_CODE_SERVER=1
 fi
@@ -321,49 +323,94 @@ toml_prepend() {
   mv "$file.tmp" "$file"
 }
 
+# The URL <ref> points to from the http(s) URL <base>, fragments dropped:
+# absolute, scheme-relative, absolute-path or relative, its . and ..
+# segments resolved (RFC 3986). Fails for another scheme (vscode://..., the
+# editor's own schemas).
+schema_url_resolve() {
+  local base="${1%%#*}" ref="${2%%#*}" scheme rest host path seg
+  local -a segs=() kept=()
+  case "$ref" in
+    http://*|https://*) base="$ref" ref="" ;;
+    *://*) return 1 ;;
+  esac
+  scheme="${base%%://*}"
+  rest="${base#*://}"
+  host="${rest%%/*}"
+  path=/
+  [[ "$rest" != */* ]] || path="/${rest#*/}"
+  case "$ref" in
+    "") ;;
+    //*)
+      host="${ref#//}"
+      path=/
+      if [[ "$host" == */* ]]; then path="/${host#*/}"; host="${host%%/*}"; fi ;;
+    /*) path="$ref" ;;
+    *) path="${path%/*}/$ref" ;;
+  esac
+  IFS=/ read -ra segs <<< "$path"
+  for seg in ${segs[@]+"${segs[@]}"}; do
+    case "$seg" in
+      ""|.) ;;
+      ..) [[ ${#kept[@]} -eq 0 ]] || unset 'kept[-1]' ;;
+      *) kept+=("$seg") ;;
+    esac
+  done
+  local IFS=/
+  printf '%s://%s/%s\n' "$scheme" "$host" "${kept[*]}"
+}
+
 # Write to <out> code-server's machine settings with every JSON schema its
 # built-in extensions (in <ext-dir>) name by URL, and every schema those refer
-# to, downloaded now. A json.schemas entry with a URL and its content makes
-# the editor use the content instead of fetching the URL, so with downloads
-# off (the user settings) opening a file sends no request. A failed download
-# only leaves its files unvalidated.
+# to, downloaded now, a level of references at a time, in parallel. A
+# json.schemas entry with a URL and its content makes the editor use the
+# content instead of fetching the URL, so with downloads off (the user
+# settings) opening a file sends no request. A failed download only leaves
+# its files unvalidated.
+# The editor resolves a schema's relative references against its $id when it
+# has one (www.schemastore.org/package says json.schemastore.org/package.json),
+# else against the URL it loaded it from: so are they here, for each to be
+# stored under the URL the editor asks for.
+# These are the machine settings: a json.schemas of the user settings would
+# be replaced by this one, not added to (VS Code merges objects across
+# settings, not arrays). A schema of your own goes in a workspace's settings.
 code_server_schemas() {
-  local ext_dir="$1" out="$2" dir u f r base fetch n=0
-  local -a queue
-  local -A seen
+  local ext_dir="$1" out="$2" dir u f r base i n=0
+  local -a level next fetch
+  local -A seen urls
   dir="$(mktemp -d)"
   : > "$dir/entries"
-  mapfile -t queue < <(jq -r '.contributes.jsonValidation[]?.url | select(test("^https?://"))' \
+  mapfile -t level < <(jq -r '.contributes.jsonValidation[]?.url | select(test("^https?://"))' \
     "$ext_dir"/*/package.json | sort -u)
-  while [[ ${#queue[@]} -gt 0 ]]; do
-    u="${queue[0]}"
-    queue=("${queue[@]:1}")
-    [[ -z "${seen[$u]:-}" ]] || continue
-    seen[$u]=1
-    n=$((n + 1))
-    f="$dir/$n.json"
-    # json.schemastore.org only redirects to www.schemastore.org.
-    fetch="${u%%#*}"
-    fetch="${fetch/#https:\/\/json.schemastore.org\//https://www.schemastore.org/}"
-    if ! curl -fsSL --max-time 30 -o "$f" "$fetch" </dev/null || ! jq -e . "$f" >/dev/null 2>&1; then
-      echo "Warning: could not download the JSON schema $u: files using it are not validated." >&2
-      continue
-    fi
-    jq -c --arg u "$u" '{url: $u, schema: .}' "$f" >> "$dir/entries"
-    # Relative references resolve against the URL the schema was loaded from.
-    # Other schemes (vscode://) are the editor's own.
-    base="${u%%#*}"
-    while IFS= read -r r; do
-      case "$r" in
-        http://*|https://*) ;;
-        *://*) continue ;;
-        /*) r="${base%%://*}://$(printf '%s' "${base#*://}" | cut -d/ -f1)$r" ;;
-        *) r="${base%/*}/$r" ;;
-      esac
-      while [[ "$r" == */./* ]]; do r="${r/\/.\///}"; done
-      while [[ "$r" =~ ^(.*://.*)/[^/]+/\.\./(.*)$ ]]; do r="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"; done
-      queue+=("$r")
-    done < <(jq -r '[.. | objects | ."$ref"? | strings | sub("#.*$"; "") | select(length > 0)] | unique[]' "$f")
+  while [[ ${#level[@]} -gt 0 ]]; do
+    fetch=() urls=() next=()
+    for u in "${level[@]}"; do
+      u="${u%%#*}"
+      [[ -z "${seen[$u]:-}" ]] || continue
+      seen[$u]=1
+      n=$((n + 1))
+      urls[$n]="$u"
+      # Fetched where json.schemastore.org redirects to, stored under the URL
+      # the editor asks for.
+      fetch+=(-o "$dir/$n.json" "${u/#https:\/\/json.schemastore.org\//https://www.schemastore.org/}")
+    done
+    # Each file checked below: one failed download fails curl as a whole.
+    [[ ${#fetch[@]} -eq 0 ]] || curl -fsSL --max-time 30 --parallel --parallel-max 8 "${fetch[@]}" </dev/null || true
+    for i in "${!urls[@]}"; do
+      u="${urls[$i]}"
+      f="$dir/$i.json"
+      if ! jq -c --arg u "$u" '{url: $u, schema: .}' "$f" > "$f.entry" 2>/dev/null; then
+        echo "Warning: could not download the JSON schema $u: files using it are not validated." >&2
+        continue
+      fi
+      cat "$f.entry" >> "$dir/entries"
+      base="$(jq -r '(."$id" // .id // empty) | strings | select(test("^https?://"))' "$f")"
+      [[ -n "$base" ]] || base="$u"
+      while IFS= read -r r; do
+        r="$(schema_url_resolve "$base" "$r")" && next+=("$r")
+      done < <(jq -r '[.. | objects | ."$ref"? | strings | select(startswith("#") | not)] | unique[]' "$f")
+    done
+    level=(${next[@]+"${next[@]}"})
   done
   mkdir -p "$(dirname "$out")"
   jq -sc '{"json.schemas": .}' "$dir/entries" > "$out"
@@ -384,12 +431,15 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
     code-server "${extensions[@]}" </dev/null
   fi
   # chat.disableAIFeatures turns off the GitHub Copilot chat and completions
-  # that code-server ships (lib/code.sh also disables the extension).
-  # telemetry.telemetryLevel: code-server's --disable-telemetry leaves the
-  # built-in extensions sending telemetry. The editor downloads no JSON
-  # schema: setup does, once, into the machine settings (code_server_schemas).
-  # The rest is the welcome page, tips, recommendations, experiments and
-  # online settings search.
+  # that code-server ships (lib/code.sh also disables the extension), and
+  # chat.mcp.gallery.enabled its MCP gallery. telemetry.*: code-server's
+  # --disable-telemetry leaves the built-in extensions sending telemetry. The
+  # editor downloads no JSON schema: setup does, once, into the machine
+  # settings (code_server_schemas). remote.autoForwardPorts: Lima forwards
+  # the VM's ports already. update.*: setup installs code-server, the editor
+  # does not update itself. The rest is the look (dark theme, no secondary
+  # side bar), the welcome page, tips, recommendations, experiments, online
+  # settings search, and Claude's onboarding checklist.
   mkdir -p "$HOME/.local/share/code-server/User"
   jq -n --arg claude "$INSTALL_CODE_CLAUDE" '
     {
@@ -426,11 +476,10 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
   # do for the CLI. These keys are machine-scoped: code-server ignores them in
   # the user settings.
   if [[ "$INSTALL_CODE_CLAUDE" == "1" ]]; then
-    mkdir -p "$(dirname "$cs_machine")"
-    { if [[ -f "$cs_machine" ]]; then cat "$cs_machine"; else echo '{}'; fi; } | jq '. + {
+    jq -c '. + {
       "claudeCode.allowDangerouslySkipPermissions": true,
       "claudeCode.initialPermissionMode": "bypassPermissions"
-    }' > "$cs_machine.tmp"
+    }' "$cs_machine" > "$cs_machine.tmp"
     mv "$cs_machine.tmp" "$cs_machine"
   fi
   # Codex and Vibe have no setting for it: their extensions start in the mode

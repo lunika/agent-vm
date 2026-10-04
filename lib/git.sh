@@ -68,25 +68,36 @@ _agent_vm_mounts_expr() {
 # The names readonlyNames always lists, one per line. .hg: Mercurial runs the
 # hooks of .hg/hgrc in a repository the user owns, which files written through
 # a share are.
+_AGENT_VM_BASE_NAMES=$'.git\n.hg'
 _agent_vm_base_readonly_names() {
-  printf '%s\n' .git .hg
+  printf '%s\n' "$_AGENT_VM_BASE_NAMES"
 }
 
-# 0 when the relative path <rel> goes through one of the names above, matched
-# as the SFTP server does: per component, whatever the case.
+# 0 when the relative path <rel> goes through one of <names> (one per line;
+# the names above by default), matched as the SFTP server does: per
+# component, whatever the case.
 _agent_vm_under_readonly_name() {
-  local rest="$1/" c names
-  names=$'\n'"$(_agent_vm_base_readonly_names)"$'\n'
+  local rest="$1/" names=$'\n'"${2:-$_AGENT_VM_BASE_NAMES}"$'\n' c st=1 set_nocase=""
+  shopt -q nocasematch || { shopt -s nocasematch; set_nocase=1; }
   while [[ -n "$rest" ]]; do
-    c="$(printf '%s' "${rest%%/*}" | tr '[:upper:]' '[:lower:]')"
+    c="${rest%%/*}"
     rest="${rest#*/}"
-    [[ "$names" == *$'\n'"$c"$'\n'* ]] && return 0
+    if [[ -n "$c" && "$names" == *$'\n'"$c"$'\n'* ]]; then
+      st=0
+      break
+    fi
   done
-  return 1
+  [[ -z "$set_nocase" ]] || shopt -u nocasematch
+  return "$st"
 }
 
 # 0 on the hosts whose file systems ignore case by default: macOS, Windows.
+# A caller asking many times sets _agent_vm_nocase_memo to 1 or 0 first.
 _agent_vm_fs_nocase() {
+  case "${_agent_vm_nocase_memo:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
   [[ "$(uname -s 2>/dev/null)" == Darwin ]] || _agent_vm_on_windows
 }
 
@@ -104,15 +115,20 @@ _agent_vm_fold() {
 # Compared whatever the case where the file system ignores it, so a path
 # spelled with other capitals is still found inside.
 _agent_vm_rel_in() {
-  local target="${1%/}" dir="${2%/}" p d
-  p="$(_agent_vm_fold "$target")"
-  d="$(_agent_vm_fold "$dir")"
-  if [[ "$p" == "$d" ]]; then
-    printf '.\n'
-    return 0
+  local target="${1%/}" dir="${2%/}" st=1 set_nocase=""
+  if _agent_vm_fs_nocase && ! shopt -q nocasematch; then
+    shopt -s nocasematch
+    set_nocase=1
   fi
-  [[ -n "$d" && "$p" == "$d/"* ]] || return 1
-  printf '%s\n' "${target:$(( ${#dir} + 1 ))}"
+  if [[ "$target" == "$dir" ]]; then
+    printf '.\n'
+    st=0
+  elif [[ -n "$dir" && "$target" == "$dir/"* ]]; then
+    printf '%s\n' "${target:$(( ${#dir} + 1 ))}"
+    st=0
+  fi
+  [[ -z "$set_nocase" ]] || shopt -u nocasematch
+  return "$st"
 }
 
 # <dir> as git spells it: the physical path, C:/... on Windows.
@@ -132,103 +148,331 @@ _agent_vm_git_abs() {
   esac
 }
 
-# The git repositories git on this machine uses in the project <dir>: the one
-# holding <dir>, then those up to two levels below it (node_modules skipped),
-# fifty at most. One directory per line, to run git in.
-_agent_vm_project_repos() {
-  local dir="$1"
-  command -v git >/dev/null 2>&1 || return 0
-  _agent_vm_git_untrusted -C "$dir" rev-parse --git-dir >/dev/null 2>&1 && printf '%s\n' "$dir"
-  find "$dir" -mindepth 2 -maxdepth 3 \( -name node_modules -prune \) -o \( -name .git -print -prune \) 2>/dev/null \
-    | awk 'NR <= 50' | while IFS= read -r g; do
-        printf '%s\n' "${g%/.git}"
-      done
-}
+# --- what git on this machine runs from the shares -----------------------------
+# The VM can write the project and the writable volumes. git on this machine
+# runs hooks, and commands its config names, from paths anywhere: in the
+# repository's own share, in another share (core.hooksPath into a volume), or
+# from git's own config kept in one. Each path is followed through every
+# symlink on the way, and checked against every share.
 
-# The folder git on the host runs the hooks of the repository at <repo> from,
-# when core.hooksPath puts it in the project <proj> (in git's spelling) and
-# outside the names above (husky sets .husky/_). Two fields, tab-separated:
-# the folder relative to the project, "." for the project itself, then
-# relative to the top of the repository when that is in the project (what
-# names it: lib/x/.githooks is .githooks), or the same again. Fails otherwise,
-# or when git cannot tell. `--git-path` without --path-format (git 2.31)
-# answers relative to <repo>.
-#
-# The folder as named, and as it is on disk when a symlink takes it elsewhere
-# (.git/hooks or a core.hooksPath linked to scripts/hooks): git runs what is
-# in the folder the link points to. A line for each that needs a name.
-_agent_vm_repo_hooks() {
-  local repo="$1" proj="$2" base top top_rel hooks phys h rel in_repo found=""
-  base="$(_agent_vm_git_spelling "$repo")" || return 1
-  hooks="$(_agent_vm_repo_hooks_dir "$repo")" || return 1
-  phys="$(_agent_vm_git_spelling "$hooks" 2>/dev/null)" || phys=""
-  [[ "$phys" != "$hooks" ]] || phys=""
-  top="$(_agent_vm_git_untrusted -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || top=""
-  for h in "$hooks" ${phys:+"$phys"}; do
-    rel="$(_agent_vm_rel_in "$h" "$proj")" || continue
-    [[ "$rel" == . ]] || ! _agent_vm_under_readonly_name "$rel" || continue
-    in_repo="$rel"
-    if [[ -n "$top" ]] && top_rel="$(_agent_vm_rel_in "$top" "$proj")" && [[ "$top_rel" != . ]]; then
-      in_repo="$(_agent_vm_rel_in "$h" "$top")" || in_repo="$rel"
-    fi
-    printf '%s\t%s\n' "$rel" "$in_repo"
-    found=1
-  done
-  [[ -n "$found" ]]
-}
-
-# The hooks folder of the repository at <repo>, absolute, in git's spelling,
-# as git names it (symlinks not resolved). Fails when git cannot tell.
-_agent_vm_repo_hooks_dir() {
-  local base hooks
-  base="$(_agent_vm_git_spelling "$1")" || return 1
-  hooks="$(_agent_vm_git_untrusted -C "$1" rev-parse --git-path hooks 2>/dev/null)" || return 1
-  [[ -n "$hooks" && "$hooks" != *$'\n'* && "$hooks" != *$'\t'* ]] || return 1
-  _agent_vm_git_abs "$hooks" "$base"
-}
-
-# <file> with every symlink resolved, the last component included, in git's
-# spelling. Fails when it does not resolve (a dangling link, a loop).
-_agent_vm_physical_file() {
-  local f="$1" t n=0 d
-  while [[ -L "$f" ]]; do
-    n=$((n + 1))
-    [[ "$n" -le 40 ]] || return 1
-    t="$(readlink "$f")" || return 1
-    case "$t" in
-      /*) f="$t" ;;
-      *) f="$(dirname "$f")/$t" ;;
-    esac
-  done
-  [[ -e "$f" ]] || return 1
-  d="$(_agent_vm_git_spelling "$(dirname "$f")")" || return 1
-  printf '%s/%s\n' "${d%/}" "$(basename "$f")"
-}
-
-# Every hooks folder of the project <dir>'s repositories that is in the
-# project and outside the names above (see _agent_vm_repo_hooks), one per
-# line, with its two fields.
-_agent_vm_project_hooks() {
-  local dir="$1" proj repo
-  proj="$(_agent_vm_git_spelling "$dir")" || return 0
-  _agent_vm_project_repos "$dir" | while IFS= read -r repo; do
-    _agent_vm_repo_hooks "$repo" "$proj"
+# The folders the VM can write, one per line, in git's spelling (symlinks
+# resolved): the project <dir> first, then its writable volumes (see
+# _agent_vm_rw_volume_dirs), each once.
+_agent_vm_writable_shares() {
+  local d
+  { printf '%s\n' "$1"; _agent_vm_rw_volume_dirs "$1"; } | while IFS= read -r d; do
+    [[ -z "$d" ]] || _agent_vm_git_spelling "$d"
   done | awk '!seen[$0]++'
 }
 
-# The same for the project <dir> and the writable volumes it gets (see
-# _agent_vm_rw_volume_dirs): their names are read-only on every share, and
-# git on this machine runs the hooks of a repository in a volume as much. A
-# volume's folder is named by its path.
+# Sets the caller's hit_share and hit_rel to the deepest of the caller's
+# shares (one per line, in git's spelling) holding <path>, and <path>
+# relative to it ("." for the share itself). Fails when none does. No
+# subshell: it runs for every path a scan looks at.
+_agent_vm_in_share() {
+  local t="${1%/}" s d r set_nocase=""
+  hit_share="" hit_rel=""
+  if _agent_vm_fs_nocase && ! shopt -q nocasematch; then
+    shopt -s nocasematch
+    set_nocase=1
+  fi
+  while IFS= read -r s; do
+    d="${s%/}"
+    [[ -n "$d" ]] || continue
+    if [[ "$t" == "$d" ]]; then
+      r=.
+    elif [[ "$t" == "$d/"* ]]; then
+      r="${t:$(( ${#d} + 1 ))}"
+    else
+      continue
+    fi
+    if [[ ${#d} -gt ${#hit_share} ]]; then
+      hit_share="$d"
+      hit_rel="$r"
+    fi
+  done <<< "$shares"
+  [[ -z "$set_nocase" ]] || shopt -u nocasematch
+  [[ -n "$hit_share" ]]
+}
+
+# Every path the file system goes through to reach <path> (absolute, in
+# git's spelling), one per line: <path>, the same with its folder's symlinks
+# resolved, then the same again for the target of each symlink on the way,
+# up to 40 links, whether the last one exists or not. A VM able to write any
+# of them chooses what is found there.
+_agent_vm_path_hops() {
+  local p="$1" d n=0 t
+  while :; do
+    printf '%s\n' "$p"
+    d="${p%/*}"
+    if d="$(_agent_vm_git_spelling "${d:-/}" 2>/dev/null)"; then
+      d="${d%/}/${p##*/}"
+      if [[ "$d" != "$p" ]]; then
+        p="$d"
+        printf '%s\n' "$p"
+      fi
+    fi
+    [[ -L "$p" ]] || return 0
+    n=$((n + 1))
+    [[ "$n" -le 40 ]] || return 0
+    t="$(readlink "$p")" || return 0
+    [[ "$t" != /* ]] || t="$(_agent_vm_host_path "$t")"
+    p="$(_agent_vm_git_abs "$t" "${p%/*}")"
+  done
+}
+
+# git, for the repository <at> of kind <kind>: W a work tree, B a bare
+# repository (named explicitly, as safe.bareRepository=explicit allows), G
+# none, for git's own global and system config.
+_agent_vm_git_at() {
+  local kind="$1" at="$2"
+  shift 2
+  case "$kind" in
+    W) _agent_vm_git_untrusted -C "$at" "$@" ;;
+    B) _agent_vm_git_untrusted --git-dir="$at" "$@" ;;
+    *) _agent_vm_git_untrusted -C / "$@" ;;
+  esac
+}
+
+# The repositories git on this machine finds in the share <dir> (git's
+# spelling), one per line, the kind before a tab (see _agent_vm_git_at): the
+# one holding <dir>, then work trees and bare repositories up to two levels
+# below it (node_modules skipped), 50 at most. X and <dir> when there are
+# more: those are not checked.
+_agent_vm_share_repos() {
+  local dir="$1" g n=0
+  _agent_vm_git_untrusted -C "$dir" rev-parse --git-dir >/dev/null 2>&1 && printf 'W\t%s\n' "$dir"
+  while IFS= read -r g; do
+    case "$g" in
+      */.git) g="${g%/.git}" ;;
+      */objects)
+        g="${g%/objects}"
+        [[ -f "$g/HEAD" && -d "$g/refs" ]] || continue ;;
+      *) continue ;;
+    esac
+    n=$((n + 1))
+    if [[ "$n" -gt 50 ]]; then
+      printf 'X\t%s\n' "$dir"
+      break
+    fi
+    if [[ -e "$g/.git" ]]; then printf 'W\t%s\n' "$g"; else printf 'B\t%s\n' "$g"; fi
+  done <<< "$(find "$dir/" -mindepth 2 -maxdepth 3 \( -name node_modules -prune \) \
+                -o \( -name .git -print -prune \) -o \( -name objects -type d -print -prune \) 2>/dev/null \
+              | sed 's#//*#/#g')"
+}
+
+# The hooks folder of the repository <at> of kind <kind>, absolute, in git's
+# spelling, as git names it: symlinks not resolved. For G, the absolute
+# core.hooksPath git's own config sets for every repository. Fails when there
+# is none, or git cannot tell. `--git-path` without --path-format (git 2.31)
+# answers relative to where git runs.
+#
+# Two lines: the top of the work tree (empty but for W), then the folder.
+_agent_vm_scan_hooks_dir() {
+  local hooks base=/ top=""
+  case "$1" in
+    G)
+      hooks="$(_agent_vm_git_at G / config --get core.hooksPath 2>/dev/null)" || return 1
+      [[ "$hooks" != "~/"* ]] || hooks="$home/${hooks#\~/}"
+      [[ "$hooks" == /* || "$hooks" == [A-Za-z]:/* ]] || return 1 ;;
+    W)
+      hooks="$(_agent_vm_git_at W "$2" rev-parse --show-toplevel --git-path hooks 2>/dev/null)" || return 1
+      [[ "$hooks" == *$'\n'* ]] || return 1
+      top="${hooks%%$'\n'*}"
+      hooks="${hooks#*$'\n'}"
+      base="$(_agent_vm_git_spelling "$2")" || return 1 ;;
+    *)
+      hooks="$(_agent_vm_git_at "$1" "$2" rev-parse --git-path hooks 2>/dev/null)" || return 1 ;;
+  esac
+  [[ -n "$hooks" && "$hooks" != *[$'\n\t']* && "$top" != *$'\t'* ]] || return 1
+  printf '%s\n' "$top"
+  _agent_vm_git_abs "$hooks" "$base"
+}
+
+# 0 when one of the paths the file system goes through to reach <path> (see
+# _agent_vm_path_hops) is in one of the caller's shares, outside the caller's
+# names: the VM can choose what is found there. Sets the caller's shown to
+# that path, relative to the project when it is there.
+_agent_vm_scan_hit() {
+  local h hit_share hit_rel
+  [[ -n "$1" ]] || return 1
+  while IFS= read -r h; do
+    [[ -n "$h" ]] && _agent_vm_in_share "$h" || continue
+    _agent_vm_under_readonly_name "$hit_rel" "$names" && continue
+    shown="$h"
+    [[ "$hit_share" != "$proj" ]] || shown="$hit_rel"
+    return 0
+  done <<< "$(_agent_vm_path_hops "$1")"
+  return 1
+}
+
+# A risk line of the scan: <text>, its control characters made visible.
+_agent_vm_scan_risk() {
+  local t="$1"
+  printf 'R\t%s\n' "${t//[[:cntrl:]]/?}"
+}
+
+# The risk lines of the config of the repository <at> of kind <kind>, whose
+# work tree is <top> (see _agent_vm_git_at): its own config, or git's global
+# and system config for G. Config files in a share, included ones whether
+# they exist yet or not (git skips a missing one, and the VM can create it).
+# Settings whose command a share holds: a path in their value, relative to
+# the top of the repository, where git runs most of them (git's own config
+# has none to take them from). awk sorts the config first, so the shell only
+# sees each file once and the settings that hold a command (section and key
+# names lowercased, as `git config --list` prints them) with a path in their
+# value: a start runs this, and a fork per line would show.
+_agent_vm_scan_config() {
+  local kind="$1" at="$2" cmd_base="$3" base=/ scope=--local k a b c w shown
+  case "$kind" in
+    W) base="$(_agent_vm_git_spelling "$at")" || return 0 ;;
+    B) cmd_base="$at" ;;
+    *) scope="" ;;
+  esac
+  _agent_vm_git_at "$kind" "$at" config --list ${scope:+"$scope"} --show-origin --includes 2>/dev/null \
+    | awk -F '\t' '
+        {
+          origin = $1; kv = substr($0, length($1) + 2); f = ""
+          if (origin ~ /^file:/) { f = substr(origin, 6); gsub(/^"|"$/, "", f) }
+          if (f != "" && !(f in seen)) { seen[f] = 1; print "O\t" f }
+          key = kv; sub(/=.*/, "", key); val = substr(kv, length(key) + 2); lk = tolower(key)
+          if (lk == "include.path" || lk ~ /^includeif\..*\.path$/) {
+            if (f != "") print "I\t" f "\t" val
+            next
+          }
+          if (lk !~ /^(core\.(fsmonitor|sshcommand|editor|pager|askpass|gitproxy|alternaterefscommand)|sequence\.editor|gpg\.program|gpg\..*\.program|diff\.external|diff\..*\.(command|textconv)|(difftool|mergetool|browser|man)\..*\.cmd|merge\..*\.driver|filter\..*\.(clean|smudge|process)|credential\.helper|credential\..*\.helper|pager\..*|alias\..*|interactive\.difffilter|uploadpack\.packobjectshook|web\.browser)$/) next
+          if (lk ~ /^alias\./ && val !~ /^!/) next
+          if (val ~ /\//) print "K\t" f "\t" key "\t" val
+        }' \
+    | while IFS=$'\t' read -r k a b c; do
+        case "$k" in
+          O)
+            _agent_vm_scan_hit "$(_agent_vm_git_abs "$a" "$base")" && _agent_vm_scan_risk "config file $shown" ;;
+          I)
+            # Relative to the file holding it, as git takes it.
+            [[ "$b" != "~/"* ]] || b="$home/${b#\~/}"
+            a="$(_agent_vm_git_abs "$a" "$base")"
+            _agent_vm_scan_hit "$(_agent_vm_git_abs "$b" "${a%/*}")" && _agent_vm_scan_risk "config file $shown" ;;
+          K)
+            # Word by word, through awk: an unquoted expansion would glob them.
+            printf '%s\n' "${c#!}" | awk '{ for (i = 1; i <= NF; i++) print $i }' \
+              | while IFS= read -r w; do
+                  w="${w#[\"\']}"; w="${w%[\"\']}"
+                  # Not an option, an assignment or a URL: a path.
+                  [[ "$w" == */* && "$w" != -* && "$w" != *=* && "$w" != *://* ]] || continue
+                  [[ "$w" != "~/"* ]] || w="$home/${w#\~/}"
+                  [[ "$w" == /* || "$w" == [A-Za-z]:/* || -n "$cmd_base" ]] || continue
+                  _agent_vm_scan_hit "$(_agent_vm_git_abs "$w" "$cmd_base")" || continue
+                  _agent_vm_scan_risk "$b = $c"
+                  break
+                done ;;
+        esac
+      done
+}
+
+# What git on this machine runs, or reads, from the folders the VM can write
+# (see _agent_vm_writable_shares) for the project <dir>: the repositories of
+# each share and git's own config. One line each, its kind first, then
+# tab-separated:
+# - H: a hooks folder, or a link on the way to it, in a share and outside the
+#   names always listed. Where it is (relative to the project when it is
+#   there, else absolute), then what names it (see _agent_vm_hooks_name):
+#   relative to the top of its repository when that is in the share
+#   (lib/x/.githooks is .githooks), else to the share; "." for a share
+#   itself, empty for a name no share can carry.
+# - R: a risk to accept, as text: a config file in a share, a setting whose
+#   command is in one, a hook linked to a file in one, a share with more
+#   repositories than are checked.
+# What a name keeps read-only is no risk: the names always listed, and those
+# of the hooks folders found here. Each line once.
+_agent_vm_git_scan() {
+  command -v git >/dev/null 2>&1 || return 0
+  _agent_vm_git_scan_lines "$1" | awk '!seen[$0]++'
+}
+
+_agent_vm_git_scan_lines() {
+  local shares proj home s kind at i n=0 hooks hp top h f t in_repo name shown
+  local hit_share hit_rel top_share top_rel names="$_AGENT_VM_BASE_NAMES"
+  local _agent_vm_windows_memo=0 _agent_vm_nocase_memo=0 kinds=() ats=() hookss=() tops=()
+  _agent_vm_on_windows && _agent_vm_windows_memo=1
+  _agent_vm_fs_nocase && _agent_vm_nocase_memo=1
+  shares="$(_agent_vm_writable_shares "$1")"
+  [[ -n "$shares" ]] || return 0
+  proj="${shares%%$'\n'*}"
+  home="$(_agent_vm_host_path "$HOME")"
+  while IFS=$'\t' read -r kind at; do
+    case "$kind" in
+      X)
+        shown="$at"
+        _agent_vm_in_share "$at" && [[ "$hit_share" == "$proj" ]] && shown="$hit_rel"
+        _agent_vm_scan_risk "more than 50 repositories in $shown: those after the 50th are not checked" ;;
+      W|B|G) kinds[n]="$kind"; ats[n]="$at"; n=$((n + 1)) ;;
+    esac
+  done <<< "$(while IFS= read -r s; do _agent_vm_share_repos "$s"; done <<< "$shares"
+              printf 'G\t/\n')"
+  # The hooks folders first: their names keep what is under them read-only.
+  for ((i = 0; i < n; i++)); do
+    top="" hooks=""
+    if h="$(_agent_vm_scan_hooks_dir "${kinds[i]}" "${ats[i]}")"; then
+      top="${h%%$'\n'*}"
+      hooks="${h#*$'\n'}"
+    elif [[ "${kinds[i]}" == W ]]; then
+      top="$(_agent_vm_git_at W "${ats[i]}" rev-parse --show-toplevel 2>/dev/null)" || top=""
+    fi
+    hookss[i]="$hooks"
+    tops[i]="$top"
+    [[ -n "$hooks" ]] || continue
+    top_share="" top_rel=""
+    if [[ -n "$top" ]] && _agent_vm_in_share "$top"; then
+      top_share="$hit_share" top_rel="$hit_rel"
+    fi
+    while IFS= read -r h; do
+      [[ -n "$h" ]] && _agent_vm_in_share "$h" || continue
+      [[ "$hit_rel" == . ]] || ! _agent_vm_under_readonly_name "$hit_rel" || continue
+      in_repo="$hit_rel"
+      if [[ "$hit_share" == "$top_share" && "$top_rel" != . ]]; then
+        in_repo="$(_agent_vm_rel_in "$h" "$top")" || in_repo="$hit_rel"
+      fi
+      [[ "$in_repo" != *[[:cntrl:]]* ]] || in_repo=""
+      shown="$h"
+      [[ "$hit_share" != "$proj" ]] || shown="$hit_rel"
+      printf 'H\t%s\t%s\n' "${shown//[[:cntrl:]]/?}" "$in_repo"
+      if name="$(_agent_vm_hooks_name "$in_repo")"; then
+        names="$names"$'\n'"$name"
+      fi
+    done <<< "$(_agent_vm_path_hops "$hooks")"
+  done
+  for ((i = 0; i < n; i++)); do
+    _agent_vm_scan_config "${kinds[i]}" "${ats[i]}" "${tops[i]}"
+    # A hook linked to a file a share holds: git runs that file, which may
+    # be outside every name.
+    hooks="${hookss[i]}"
+    [[ -n "$hooks" ]] && hp="$(_agent_vm_git_spelling "$hooks")" || continue
+    for f in "$hp"/*; do
+      [[ -L "$f" && "$f" != *.sample ]] || continue
+      t="$(readlink "$f")" || continue
+      [[ "$t" != /* ]] || t="$(_agent_vm_host_path "$t")"
+      _agent_vm_scan_hit "$(_agent_vm_git_abs "$t" "$hp")" && _agent_vm_scan_risk "hook ${f##*/} runs $shown"
+    done
+  done
+}
+
+# The lines of kind <kind> (H or R) of a scan (see _agent_vm_git_scan), the
+# kind dropped.
+_agent_vm_scan_part() {
+  printf '%s\n' "$2" | awk -F '\t' -v k="$1" '$1 == k { print substr($0, length(k) + 2) }'
+}
+
+# The hooks folders of the project <dir>'s shares, as the H lines of the
+# scan: where, then what names it, tab-separated.
 _agent_vm_share_hooks() {
-  local v rel in_repo
-  _agent_vm_project_hooks "$1"
-  while IFS= read -r v; do
-    [[ -n "$v" ]] || continue
-    while IFS=$'\t' read -r rel in_repo; do
-      [[ -n "$rel" ]] && printf '%s\t%s\n' "${v%/}/$rel" "$in_repo"
-    done <<< "$(_agent_vm_project_hooks "$v")"
-  done <<< "$(_agent_vm_rw_volume_dirs "$1")"
+  _agent_vm_scan_part H "$(_agent_vm_git_scan "$1")"
+}
+
+# The risks to accept for the project <dir>'s shares, as the R lines of the
+# scan.
+_agent_vm_share_config_risks() {
+  _agent_vm_scan_part R "$(_agent_vm_git_scan "$1")"
 }
 
 # The name that keeps the hooks folder <rel> read-only: its first component,
@@ -254,13 +498,14 @@ _agent_vm_names_json() {
 
 # The readonlyNames JSON array a start gives the project <dir> unless the user
 # declines a name: the names always listed, and those keeping its hooks
-# folders read-only.
+# folders read-only. From <scan> (see _agent_vm_git_scan) when given.
 _agent_vm_readonly_names() {
-  local rel in_repo name names=()
+  local rel in_repo name names=() scan
+  if [[ $# -ge 2 ]]; then scan="$2"; else scan="$(_agent_vm_git_scan "$1")"; fi
   while IFS=$'\t' read -r rel in_repo; do
     [[ -n "$rel" ]] || continue
     name="$(_agent_vm_hooks_name "$in_repo")" && names+=("$name")
-  done <<< "$(_agent_vm_share_hooks "$1")"
+  done <<< "$(_agent_vm_scan_part H "$scan")"
   _agent_vm_names_json ${names[@]+"${names[@]}"}
 }
 
@@ -273,103 +518,6 @@ _agent_vm_names_text() {
 
 _agent_vm_hooks_note() {
   echo "Note: git runs hooks from $1 (core.hooksPath): every '$2' in the project is read-only for the VM too."
-}
-
-# What git on this machine takes from files the VM can write, for the
-# repository at <repo> in the project <proj> (git's spelling), one line each:
-# a config file included from the project (whether it exists yet or not),
-# and a setting whose command names
-# a file in the project. The protected names are excepted, and core.hooksPath,
-# which _agent_vm_repo_hooks covers. A relative path in a command is taken
-# from the top of the repository, where git runs most of them.
-#
-# awk sorts the config first, so the shell only sees each file once and the
-# settings that hold a command (section and key names lowercased, as
-# `git config --list` prints them) with a path in their value: a start runs
-# this, and a fork per line would show.
-_agent_vm_repo_config_risks() {
-  local repo="$1" proj="$2" base top kind a b w rel hooks f p
-  base="$(_agent_vm_git_spelling "$repo")" || return 0
-  top="$(_agent_vm_git_untrusted -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || return 0
-  _agent_vm_git_untrusted -C "$repo" config --list --show-origin --includes 2>/dev/null \
-    | awk -F '\t' '
-        {
-          origin = $1; kv = substr($0, length($1) + 2)
-          if (origin ~ /^file:/ && !(origin in seen)) {
-            seen[origin] = 1; f = substr(origin, 6); gsub(/^"|"$/, "", f); print "O\t" f
-          }
-          key = kv; sub(/=.*/, "", key); val = substr(kv, length(key) + 2); lk = tolower(key)
-          if (lk == "include.path" || lk ~ /^includeif\..*\.path$/) {
-            if (origin ~ /^file:/) { f = substr(origin, 6); gsub(/^"|"$/, "", f); print "I\t" f "\t" val }
-            next
-          }
-          if (lk !~ /^(core\.(fsmonitor|sshcommand|editor|pager|askpass|gitproxy|alternaterefscommand)|sequence\.editor|gpg\.program|gpg\..*\.program|diff\.external|diff\..*\.(command|textconv)|(difftool|mergetool|browser|man)\..*\.cmd|merge\..*\.driver|filter\..*\.(clean|smudge|process)|credential\.helper|credential\..*\.helper|pager\..*|alias\..*|interactive\.difffilter|uploadpack\.packobjectshook|web\.browser)$/) next
-          if (lk ~ /^alias\./ && val !~ /^!/) next
-          if (val ~ /\//) print "K\t" key "\t" val
-        }' \
-    | while IFS=$'\t' read -r kind a b; do
-        if [[ "$kind" == O ]]; then
-          rel="$(_agent_vm_rel_in "$(_agent_vm_git_abs "$a" "$base")" "$proj")" \
-            && ! _agent_vm_under_readonly_name "$rel" \
-            && printf 'config file %s\n' "$rel"
-          continue
-        fi
-        # An include, by its value: git skips a file that does not exist, so
-        # --includes does not list it, and the VM can create it once the VM
-        # runs. Relative to the file holding it, as git takes it.
-        if [[ "$kind" == I ]]; then
-          [[ "$b" == "~/"* ]] && b="$HOME/${b#\~/}"
-          a="$(_agent_vm_git_abs "$a" "$base")"
-          rel="$(_agent_vm_rel_in "$(_agent_vm_git_abs "$b" "${a%/*}")" "$proj")" \
-            && ! _agent_vm_under_readonly_name "$rel" \
-            && printf 'config file %s\n' "$rel"
-          continue
-        fi
-        # Word by word, through awk: an unquoted expansion would glob them.
-        printf '%s\n' "${b#!}" | awk '{ for (i = 1; i <= NF; i++) print $i }' \
-          | while IFS= read -r w; do
-              w="${w#[\"\']}"; w="${w%[\"\']}"
-              # Not an option, an assignment or a URL: a path.
-              [[ "$w" == */* && "$w" != -* && "$w" != *=* && "$w" != *://* ]] || continue
-              [[ "$w" == "~/"* ]] && w="$HOME/${w#\~/}"
-              rel="$(_agent_vm_rel_in "$(_agent_vm_git_abs "$w" "$top")" "$proj")" || continue
-              _agent_vm_under_readonly_name "$rel" && continue
-              printf '%s = %s\n' "$a" "$b"
-              break
-            done
-      done
-  # A hook that is a symlink to a file of the project: git runs that file,
-  # which no name keeps read-only, from a hooks folder that is.
-  hooks="$(_agent_vm_repo_hooks_dir "$repo")" || return 0
-  for f in "$hooks"/*; do
-    [[ -L "$f" && "$f" != *.sample ]] || continue
-    p="$(_agent_vm_physical_file "$f")" || continue
-    rel="$(_agent_vm_rel_in "$p" "$proj")" || continue
-    _agent_vm_under_readonly_name "$rel" && continue
-    printf 'hook %s runs %s\n' "${f##*/}" "$rel"
-  done
-}
-
-# The same for every repository of the project <dir>, each line once.
-_agent_vm_project_config_risks() {
-  local dir="$1" proj repo
-  proj="$(_agent_vm_git_spelling "$dir")" || return 0
-  _agent_vm_project_repos "$dir" | while IFS= read -r repo; do
-    _agent_vm_repo_config_risks "$repo" "$proj"
-  done | awk '!seen[$0]++'
-}
-
-# The same for the project <dir> and its writable volumes, a volume's lines
-# after its path.
-_agent_vm_share_config_risks() {
-  local v line
-  _agent_vm_project_config_risks "$1"
-  while IFS= read -r v; do
-    [[ -n "$v" ]] || continue
-    while IFS= read -r line; do
-      [[ -n "$line" ]] && printf '%s: %s\n' "$v" "$line"
-    done <<< "$(_agent_vm_project_config_risks "$v")"
-  done <<< "$(_agent_vm_rw_volume_dirs "$1")"
 }
 
 # What a Lima without readonlyNames exposes when the shares are reverse-sshfs

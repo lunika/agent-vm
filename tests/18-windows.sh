@@ -275,7 +275,7 @@ check "CRLF env files reach the VM without CRs" \
 # which only the builtin SFTP server with readonlyNames enforces. On any other
 # host the same VM gets 9p. A limactl of its own, reporting QEMU and no type.
 mkdir -p "$SB/qemulima" "$SB/qemulima-home/agent-vm-w"
-printf '#!/bin/sh\n[ "$1" = list ] && echo "qemu <nil>"\nexit 0\n' > "$SB/qemulima/limactl"
+printf '#!/bin/sh\n[ "$1" = list ] && echo "qemu <nil> null"\nexit 0\n' > "$SB/qemulima/limactl"
 chmod +x "$SB/qemulima/limactl"
 echo 2.1.0 > "$SB/qemulima-home/agent-vm-w/lima-version"
 enforced_on() {  # <fake uname dir>

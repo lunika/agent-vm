@@ -162,6 +162,11 @@ _agent_vm_check_linux_prereqs() {
 # 0 when running on Windows (Git Bash, MSYS2 or Cygwin), as reported by
 # uname: MINGW64_NT-..., MSYS_NT-... or CYGWIN_NT-....
 _agent_vm_on_windows() {
+  # A caller asking many times sets _agent_vm_windows_memo to 1 or 0 first.
+  case "${_agent_vm_windows_memo:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
   case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*) return 0 ;;
     *) return 1 ;;
@@ -195,6 +200,11 @@ _agent_vm_host_path() {
 # Lima's state directory: LIMA_HOME, or ~/.lima.
 _agent_vm_lima_home() {
   printf '%s\n' "${LIMA_HOME:-$HOME/.lima}"
+}
+
+# The log of <vm>'s Lima host agent, which says why it did not start.
+_agent_vm_ha_log() {
+  printf '%s/%s/ha.stderr.log\n' "$(_agent_vm_lima_home)" "$1"
 }
 
 # WSL generation from the kernel release: prints 2 or 1, or nothing when not
